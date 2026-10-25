@@ -45,3 +45,19 @@ Stage Summary:
 - HTTP 418 tuntas: scanner tidak lagi jatuh ke satu sumber; 6 sumber pasar sungguhan + throttle + ban-aware + stale rescue
 - Kesehatan sumber di sandbox: MEXC_SPOT ✓, BYBIT ✓, OKX ✓ (MEXC Futures & Binance diblokir geo — otomatis dihindari, tetap dipakai di VPS user)
 - Semua agent kembali ACTIVE tanpa error; harga = pasar sungguhan
+
+---
+Task ID: 3
+Agent: Main Agent (Z.ai)
+Task: Panduan + paket deployment VPS untuk BLOCXERZ MEXC Desk
+
+Work Log:
+- Verifikasi build production: npm run build sukses (output standalone), prisma client ikut ter-trace, .env tersalin ke .next/standalone
+- Uji standalone server di port 3001: HTTP 200, API status OK — setara dengan kondisi VPS
+- Buat ecosystem.config.js (PM2: PORT 3000, HOSTNAME 0.0.0.0, autorestart, max_memory_restart 700M)
+- Buat scripts/deploy.sh (instal Node 20, npm/bun install, perbaiki DATABASE_URL ke path VPS, prisma generate + db:push, build, PM2 start + startup)
+- Kemas source-only zip: download/blocxerz-vps.zip (223KB, 116 file) untuk diupload ke VPS
+
+Stage Summary:
+- Deploy ke VPS = upload zip → bash scripts/deploy.sh → buka http://IP_VPS:3000 → isi API key MEXC di tab Pengaturan
+- Di VPS tanpa blokir geo, sumber data otomatis MEXC FUTURES langsung
