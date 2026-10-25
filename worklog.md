@@ -104,3 +104,21 @@ Stage Summary:
 - Mobile 390px: tidak ada lagi halaman meluber (601→390), semua tab terlihat, kartu agent tanpa tumpang-tindih, Strategy Engine tampil sebagai kartu mudah dibaca
 - Desktop 1440px: tidak ada perubahan visual (tabel lengkap tetap)
 - Screenshot before/after tersimpan di download/mobile-fix/
+
+---
+Task ID: 6
+Agent: Main Agent (Z.ai)
+Task: Hapus badge "BYBIT PERP (fallback) · PASAR SUNGGUHAN" dari header, ganti dengan teks berjalan (running text) peringatan Monumen Perjuangan Rawagede
+
+Work Log:
+- Hapus rantai srcLabel (6 sumber + label fallback) dan badge amber-nya dari header.tsx — permintaan user: teks sumber data/fallback tidak ditampilkan lagi; import Activity ikut dibersihkan
+- Buat komponen TickerRawagede di header.tsx: strip 28px di bawah baris header (dalam header sticky, selalu terlihat), teks emas mono di granit gelap #0d0a06, pemisah segmen ✦
+- Teks lengkap sesuai input user (verbatim, dipecah 14 segmen): SELAMAT DATANG DI MONUMEN PERJUANGAN RAWAGEDE, 9 Des 1947 - 431 putra, dibangun Nov 1995 - diresmikan 12 Juli 1996, Taman Makam Pahlawan Sampurna Raga 181 pahlawan, puisi Chairil Anwar 1948 lengkap, JAS MERAH - JANGAN SEKALI-KALI MELUPAKAN SEJARAH
+- Mekanisme marquee mulus: track w-max berisi 2 salinan teks identik, animasi CSS translateX(0 → -50%) linear infinite (globals.css: @keyframes ticker-scroll + .ticker-track, durasi via --ticker-duration default 180s), gradasi tepi kiri/kanan, prefers-reduced-motion = animasi berhenti
+- Kalibrasi: lebar 1 salinan teks = 11.877px → 180s ≈ 66px/dtk (kecepatan baca nyaman)
+- Verifikasi agent-browser: mobile 390px pageW=390 (zero overflow), badge BYBIT hilang, ticker bergerak (transform -950→-1016px per 1 dtk, dur 180s); desktop 1440px pageW=1440, dashboard utuh, bot tetap RUNNING (siklus 555); tsc bersih, eslint bersih
+- Screenshot: download/ticker/mobile-390-header.png & desktop-1440-header.png
+
+Stage Summary:
+- Header kini: baris 1 brand+status+kontrol, baris 2 = teks berjalan peringatan Monumen Rawagede (tanpa label sumber data/fallback di mana pun)
+- Teks berjalan loop mulus 3 menit/siklus, aman di mobile (tidak meluber), hormati reduced-motion

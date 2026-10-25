@@ -7,7 +7,7 @@
 import { useEffect, useState } from 'react'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
-import { Activity, Pause, Play, Radio, ShieldAlert } from 'lucide-react'
+import { Pause, Play, Radio, ShieldAlert } from 'lucide-react'
 import { toast } from '@/hooks/use-toast'
 import type { StatusResponse } from './base'
 
@@ -31,6 +31,46 @@ function LogoRawagede() {
       </g>
       <path d="M32 5 L32.82 7.27 L36.23 7.35 L33.33 8.83 L34 11.15 L32 9.8 L30 11.15 L30.67 8.83 L27.77 7.35 L31.18 7.27 Z" fill="#e8c766" />
     </svg>
+  )
+}
+
+// ── Teks berjalan: peringatan Monumen Perjuangan Rawagede ──
+// Dipisah per segmen (pemisah ✦) agar mudah dibaca saat bergulir
+const TICKER_SEGMENTS = [
+  'SELAMAT DATANG DI MONUMEN PERJUANGAN RAWAGEDE - BALONGSARI, RAWAMERTA, KARAWANG',
+  '9 DESEMBER 1947 - 431 PUTRA TERBAIK GUGUR MEMPERTAHANKAN KEMERDEKAAN',
+  'DIBANGUN NOV 1995 - DIRESMIKAN 12 JULI 1996',
+  'TAMAN MAKAM PAHLAWAN SAMPURNA RAGA - 181 PAHLAWAN BERSEMAYAM',
+  'KAMI YANG KINI TERBARING ANTARA KARAWANG-BEKASI TIDAK BISA TERIAK "MERDEKA" DAN ANGKAT SENJATA LAGI. TAPI SIAPAKAH YANG TIDAK LAGI MENDENGAR DERU KAMI, TERBAYANG KAMI MAJU DAN BERDEGAP HATI?',
+  'KAMI BICARA PADAMU DALAM HENING DI MALAM SEPI JIKA DADA RASA HAMPA DAN JAM DINDING YANG BERDETAK. KAMI MATI MUDA. YANG TINGGAL TULANG DILIPUTI DEBU. KENANG, KENANGLAH KAMI.',
+  'KAMI SUDAH COBA APA YANG KAMI BISA TAPI KERJA BELUM SELESAI, BELUM APA-APA. KAMI SUDAH BERI KAMI PUNYA JIWA KERJA BELUM SELESAI, BELUM BISA MEMPERHITUNGKAN ARTI 4-5 RIBU NYAWA.',
+  'KAMI CUMA TULANG-TULANG BERSERAKAN TAPI ADALAH KEPUNYAANMU. KAULAH LAGI YANG TENTUKAN NILAI TULANG-TULANG BERSERAKAN.',
+  'ATAUKAH JIWA KAMI MELAYANG UNTUK KEMERDEKAAN, KEMENANGAN DAN HARAPAN ATAU TIDAK UNTUK APA-APA, KAMI TIDAK TAHU, KAMI TIDAK LAGI BISA BERKATA KAULAH SEKARANG YANG BERKATA.',
+  'KAMI BICARA PADAMU DALAM HENING DI MALAM SEPI JIKA DADA RASA HAMPA DAN JAM DINDING YANG BERDETAK KENANG-KENANGLAH KAMI.',
+  'TERUSKAN, TERUSKAN JIWA KAMI MENJAGA BUNG KARNO, MENJAGA BUNG HATTA, MENJAGA BUNG SJAHIRIR. KAMI SEKARANG MAYAT BERILAH KAMI ARTI.',
+  'BERJAGALAH TERUS DI GARIS BATAS PERNYATAAN DAN IMPIAN. KENANG, KENANGLAH KAMI YANG TINGGAL TULANG-TULANG DILIPUTI DEBU.',
+  'KAMI TERBARING ANTARA KARAWANG-BEKASI - CHAIRIL ANWAR 1948',
+  'JAS MERAH - JANGAN SEKALI-KALI MELUPAKAN SEJARAH',
+]
+const TICKER_TEXT = TICKER_SEGMENTS.map((s) => `✦ ${s}`).join(' ') + ' ✦'
+
+function TickerRawagede() {
+  return (
+    <div
+      className="relative overflow-hidden border-t border-yellow-500/10 bg-[#0d0a06]"
+      role="marquee"
+      aria-label="Teks peringatan Monumen Perjuangan Rawagede"
+    >
+      <div className="ticker-track flex w-max items-center whitespace-nowrap py-1.5 font-mono text-[10px] font-semibold tracking-[0.14em] text-yellow-500/90 sm:text-[11px]">
+        <span className="pl-6 pr-12">{TICKER_TEXT}</span>
+        <span className="pr-12" aria-hidden="true">
+          {TICKER_TEXT}
+        </span>
+      </div>
+      {/* gradasi tepi agar teks masuk/keluar dengan halus */}
+      <div className="pointer-events-none absolute inset-y-0 left-0 w-8 bg-gradient-to-r from-[#0d0a06] to-transparent" />
+      <div className="pointer-events-none absolute inset-y-0 right-0 w-8 bg-gradient-to-l from-[#0d0a06] to-transparent" />
+    </div>
   )
 }
 
@@ -72,20 +112,6 @@ export function Header({ status, onRefresh }: { status: StatusResponse | null; o
   }
 
   const running = status?.running ?? false
-  const srcLabel =
-    status?.marketSource === 'MEXC_FUTURES'
-      ? 'MEXC FUTURES · PASAR SUNGGUHAN'
-      : status?.marketSource === 'MEXC_SPOT'
-        ? 'MEXC SPOT (fallback) · PASAR SUNGGUHAN'
-        : status?.marketSource === 'BINANCE_FUTURES'
-          ? 'BINANCE FUTURES (fallback) · PASAR SUNGGUHAN'
-          : status?.marketSource === 'BINANCE_SPOT'
-            ? 'BINANCE SPOT (fallback) · PASAR SUNGGUHAN'
-            : status?.marketSource === 'BYBIT'
-              ? 'BYBIT PERP (fallback) · PASAR SUNGGUHAN'
-              : status?.marketSource === 'OKX'
-                ? 'OKX SWAP (fallback) · PASAR SUNGGUHAN'
-                : 'MENYAMBUNGKAN…'
 
   return (
     <header className="sticky top-0 z-30 border-b border-yellow-500/15 bg-[#14100a]/95 backdrop-blur supports-[backdrop-filter]:bg-[#14100a]/80">
@@ -114,11 +140,6 @@ export function Header({ status, onRefresh }: { status: StatusResponse | null; o
           >
             <Radio className="h-3 w-3" />
             {running ? 'RUNNING' : 'STOPPED'}
-          </Badge>
-
-          <Badge className="order-last w-full min-w-0 border-0 bg-amber-500/10 px-2.5 py-1.5 font-mono text-[10px] font-bold text-amber-400 sm:order-none sm:w-auto">
-            <Activity className="h-3 w-3 shrink-0" />
-            <span className="min-w-0 truncate">{srcLabel}</span>
           </Badge>
 
           {status?.dailyGuard && (
@@ -158,6 +179,9 @@ export function Header({ status, onRefresh }: { status: StatusResponse | null; o
           </Button>
         </div>
       </div>
+
+      {/* ── Teks berjalan peringatan Monumen Perjuangan Rawagede ── */}
+      <TickerRawagede />
     </header>
   )
 }

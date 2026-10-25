@@ -127,3 +127,24 @@
     overflow-x: clip;
   }
 }
+
+/* ── Teks berjalan (running text) — peringatan Monumen Rawagede ──
+   Track berisi 2 salinan teks identik; animasi -50% = 1 salinan penuh,
+   sehingga loop terlihat mulus tanpa lompatan */
+@keyframes ticker-scroll {
+  from {
+    transform: translateX(0);
+  }
+  to {
+    transform: translateX(-50%);
+  }
+}
+.ticker-track {
+  animation: ticker-scroll var(--ticker-duration, 180s) linear infinite;
+  will-change: transform;
+}
+@media (prefers-reduced-motion: reduce) {
+  .ticker-track {
+    animation: none;
+  }
+}
