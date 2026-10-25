@@ -33,7 +33,7 @@ export function PositionsTab({ positions, onRefresh }: { positions: PositionRow[
   return (
     <section aria-label="Posisi terbuka">
       <div className="mb-2 flex items-center gap-2 text-xs font-semibold text-zinc-300">
-        <Crosshair className="h-4 w-4 text-emerald-400" />
+        <Crosshair className="h-4 w-4 text-yellow-500" />
         POSISI TERBUKA ({positions.length}) · Long & Short otomatis sesuai indikator
       </div>
       <div className="overflow-x-auto rounded-xl border border-white/10">

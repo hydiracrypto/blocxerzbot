@@ -61,3 +61,22 @@ Work Log:
 Stage Summary:
 - Deploy ke VPS = upload zip → bash scripts/deploy.sh → buka http://IP_VPS:3000 → isi API key MEXC di tab Pengaturan
 - Di VPS tanpa blokir geo, sumber data otomatis MEXC FUTURES langsung
+
+---
+Task ID: 4
+Agent: Main Agent (Z.ai)
+Task: Ubah tema template situs + logo ke tema Monumen Rawagede (nama BLOCXERZ MEXC DESK v3.0 dipertahankan)
+
+Work Log:
+- Riset visual via image-search: Monumen Perjuangan Rawagede = piramida marmer terpotong putih + tangga tengah + pintu, papan granit hitam inskripsi emas, makam pahlawan (483 jiwa, 9 Des 1947)
+- Desain palet "Granit & Emas Rawagede": background granit hangat (#0d0a06 / #14100a / #16120c), emas (yellow-500/400) sebagai aksen brand, putih marmer untuk logo; hijau/merah DIPERTAHANKAN khusus semantik trading (PnL, bull/bear, LONG/SHORT, TP, harga naik/turun, win rate)
+- Logo SVG Monumen Rawagede dibuat (src/app/icon.svg + public/rawagede-monument.svg): piramida marmer putih, pintu, 3 tangga emas, bintang emas puncak, ring emas — dipakai sebagai favicon & logo header (komponen LogoRawagede inline)
+- layout.tsx: title + "Edisi Monumen Rawagede", description + Karawang, favicon internal
+- globals.css: --ring emas (focus state)
+- header.tsx: logo monumen menggantikan Zap, "MEXC DESK" emas, subtitle + "Edisi Monumen Rawagede — Karawang 1947", RUNNING badge emas, START button emas, border header granit
+- page.tsx: bg granit hangat, Skor Konfluensi emas, PAPER badge emas, tab aktif emas
+- agents.tsx: ikon & status ACTIVE emas; scanner-tab: DIPANTAU emas, header granit; analysis-tab: factor dots emas; positions/trades/logs/settings: ikon emas, signal log emas, warn oranye, tombol SIMPAN emas
+- Verifikasi screenshot 3 tab: konsisten, lint bersih, favicon 200
+
+Stage Summary:
+- Tema Monumen Rawagede lengkap: logo tugu piramida marmer + tangga & bintang emas, palet granit gelap + emas, semua tab konsisten, nama BLOCXERZ MEXC DESK v3.0 utuh

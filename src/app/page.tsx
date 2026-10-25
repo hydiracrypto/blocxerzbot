@@ -40,7 +40,7 @@ export default function Page() {
   }, [positions.data])
 
   return (
-    <div className="min-h-screen bg-[#070b0f] text-zinc-100">
+    <div className="min-h-screen bg-[#0d0a06] text-zinc-100">
       <Header status={status.data} onRefresh={refreshAll} />
 
       <main className="mx-auto max-w-[1500px] space-y-4 px-4 py-4 sm:px-6">
@@ -53,7 +53,7 @@ export default function Page() {
             <div className="flex items-center gap-1.5 text-[9px] font-semibold tracking-wider text-zinc-500">
               <Sigma className="h-3 w-3" /> SKOR KONFLUENSI TERTINGGI
             </div>
-            <div className="mt-1 font-mono text-xl font-bold text-emerald-400">{bestSignal}/8</div>
+            <div className="mt-1 font-mono text-xl font-bold text-yellow-500">{bestSignal}/8</div>
             <div className="text-[9px] text-zinc-600">sinyal masuk saat ≥ {settings.data?.minScore ?? 7}</div>
           </div>
           <div className="rounded-xl border border-white/10 bg-white/[0.02] p-3">
@@ -74,7 +74,7 @@ export default function Page() {
           <div className="rounded-xl border border-white/10 bg-white/[0.02] p-3">
             <div className="text-[9px] font-semibold tracking-wider text-zinc-500">MODE EKSEKUSI</div>
             <div className="mt-1 flex items-center gap-2">
-              <Badge className={`border-0 text-[10px] font-bold ${settings.data?.mode === 'LIVE' ? 'bg-red-500 text-white' : 'bg-emerald-500/15 text-emerald-400'}`}>
+              <Badge className={`border-0 text-[10px] font-bold ${settings.data?.mode === 'LIVE' ? 'bg-red-500 text-white' : 'bg-yellow-500/15 text-yellow-400'}`}>
                 {settings.data?.mode === 'LIVE' ? 'LIVE · REAL' : 'PAPER'}
               </Badge>
               <span className="font-mono text-[10px] text-zinc-500">{settings.data?.hasKeys ? 'API ✓' : 'API —'}</span>
@@ -97,7 +97,7 @@ export default function Page() {
               <TabsTrigger
                 key={v}
                 value={v}
-                className={`h-7 rounded-lg px-3 text-[11px] font-semibold ${tab === v ? 'bg-emerald-500 text-black' : 'text-zinc-400 hover:text-zinc-200'}`}
+                className={`h-7 rounded-lg px-3 text-[11px] font-semibold ${tab === v ? 'bg-yellow-500 text-black' : 'text-zinc-400 hover:text-zinc-200'}`}
               >
                 {label}
               </TabsTrigger>

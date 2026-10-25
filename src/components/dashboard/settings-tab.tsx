@@ -80,7 +80,7 @@ export function SettingsTab({ settings, onSaved }: { settings: SettingsData | nu
       {/* Eksekusi & API */}
       <section className="space-y-4 rounded-xl border border-white/10 bg-white/[0.02] p-4">
         <div className="flex items-center gap-2 text-xs font-semibold text-zinc-200">
-          <KeyRound className="h-4 w-4 text-emerald-400" />
+          <KeyRound className="h-4 w-4 text-yellow-500" />
           EKSEKUSI PASAR SUNGGUHAN · MEXC FUTURES
         </div>
 
@@ -88,7 +88,7 @@ export function SettingsTab({ settings, onSaved }: { settings: SettingsData | nu
           <div>
             <div className="flex items-center gap-2 text-xs font-semibold text-zinc-200">
               Mode Live (uang riil)
-              <Badge className={`border-0 text-[9px] font-bold ${form.mode === 'LIVE' ? 'bg-red-500 text-white' : 'bg-emerald-500/15 text-emerald-400'}`}>
+              <Badge className={`border-0 text-[9px] font-bold ${form.mode === 'LIVE' ? 'bg-red-500 text-white' : 'bg-yellow-500/15 text-yellow-400'}`}>
                 {form.mode === 'LIVE' ? 'LIVE · REAL' : 'PAPER · SIMULASI'}
               </Badge>
             </div>
@@ -120,19 +120,19 @@ export function SettingsTab({ settings, onSaved }: { settings: SettingsData | nu
         </div>
 
         {form.hasKeys && (
-          <div className="flex items-center gap-2 rounded-lg border border-emerald-500/25 bg-emerald-500/5 p-2.5 text-[10px] text-emerald-300">
+          <div className="flex items-center gap-2 rounded-lg border border-yellow-500/25 bg-yellow-500/5 p-2.5 text-[10px] text-yellow-300">
             <ShieldCheck className="h-4 w-4 shrink-0" />
             API key terkonfigurasi. Untuk keamanan: batasi API key Anda ke Futures Trading tanpa withdrawal, dan whitelist IP server ini di MEXC.
           </div>
         )}
         {accountCheck && (
-          <div className={`rounded-lg border p-2.5 text-[10px] ${accountCheck.ok ? 'border-emerald-500/25 bg-emerald-500/5 text-emerald-300' : 'border-red-500/25 bg-red-500/5 text-red-300'}`}>
+          <div className={`rounded-lg border p-2.5 text-[10px] ${accountCheck.ok ? 'border-yellow-500/25 bg-yellow-500/5 text-yellow-300' : 'border-red-500/25 bg-red-500/5 text-red-300'}`}>
             {accountCheck.ok ? '✓' : '✕'} {accountCheck.message}
           </div>
         )}
 
         <Dialog open={liveDialog} onOpenChange={setLiveDialog}>
-          <DialogContent className="border-white/10 bg-[#10161d]">
+          <DialogContent className="border-white/10 bg-[#16120c]">
             <DialogHeader>
               <DialogTitle className="flex items-center gap-2 text-sm text-red-400">
                 <AlertTriangle className="h-4 w-4" /> Aktifkan Mode Live?
@@ -158,7 +158,7 @@ export function SettingsTab({ settings, onSaved }: { settings: SettingsData | nu
       {/* Risk & Strategi */}
       <section className="space-y-4 rounded-xl border border-white/10 bg-white/[0.02] p-4">
         <div className="flex items-center gap-2 text-xs font-semibold text-zinc-200">
-          <Settings2 className="h-4 w-4 text-emerald-400" />
+          <Settings2 className="h-4 w-4 text-yellow-500" />
           RISK MANAGEMENT & STRATEGI
         </div>
 
@@ -182,7 +182,7 @@ export function SettingsTab({ settings, onSaved }: { settings: SettingsData | nu
               <SelectTrigger className="h-9 border-white/10 bg-white/[0.03] text-xs">
                 <SelectValue />
               </SelectTrigger>
-              <SelectContent className="border-white/10 bg-[#10161d]">
+              <SelectContent className="border-white/10 bg-[#16120c]">
                 <SelectItem value="LADDER">Ladder — TP1/TP2/TP3: 33/33/34% + SL→BE</SelectItem>
                 <SelectItem value="TP3_FULL">TP3 Full — tahan sampai TP3, SL→BE setelah TP1</SelectItem>
               </SelectContent>
@@ -210,7 +210,7 @@ export function SettingsTab({ settings, onSaved }: { settings: SettingsData | nu
       </section>
 
       <div className="lg:col-span-2">
-        <Button onClick={save} disabled={saving} className="h-10 w-full gap-2 bg-emerald-500 font-semibold text-black hover:bg-emerald-400">
+        <Button onClick={save} disabled={saving} className="h-10 w-full gap-2 bg-yellow-500 font-semibold text-black hover:bg-yellow-400">
           <Save className="h-4 w-4" />
           {saving ? 'Menyimpan…' : 'SIMPAN PENGATURAN'}
         </Button>

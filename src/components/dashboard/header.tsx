@@ -2,13 +2,37 @@
 
 // ═══════════════════════════════════════════════════════════════════════
 // HEADER — status bot, kontrol start/stop, mode, sumber data pasar
+// Tema: Monumen Rawagede — Balongsari, Rawamerta, Karawang
 // ═══════════════════════════════════════════════════════════════════════
 import { useEffect, useState } from 'react'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
-import { Activity, Pause, Play, Radio, ShieldAlert, Zap } from 'lucide-react'
+import { Activity, Pause, Play, Radio, ShieldAlert } from 'lucide-react'
 import { toast } from '@/hooks/use-toast'
 import type { StatusResponse } from './base'
+
+// Logo Monumen Rawagede — piramida marmer + tangga emas + bintang
+function LogoRawagede() {
+  return (
+    <svg viewBox="0 0 64 64" className="h-6 w-6" aria-label="Logo Monumen Rawagede">
+      <circle cx="32" cy="32" r="30" fill="#1a1510" />
+      <circle cx="32" cy="32" r="29.2" fill="none" stroke="#d4af37" strokeWidth="1.6" opacity="0.95" />
+      <rect x="14" y="50.2" width="36" height="2.4" rx="0.6" fill="#332c22" />
+      <rect x="11.5" y="53.2" width="41" height="2.4" rx="0.6" fill="#262019" />
+      <path d="M19 50.2 L21.6 25 L42.4 25 L45 50.2 Z" fill="#e9e4d8" />
+      <path d="M19 50.2 L21.6 25 L32 25 L32 50.2 Z" fill="#f6f2e7" />
+      <path d="M21.6 25 L42.4 25 L32 12.5 Z" fill="#f7f3e8" />
+      <path d="M21.6 25 L32 25 L32 12.5 Z" fill="#fffdf4" />
+      <path d="M29.3 40.5 L29.3 32.5 Q32 30 34.7 32.5 L34.7 40.5 Z" fill="#17120b" />
+      <g stroke="#d4af37" strokeWidth="1.5" strokeLinecap="round">
+        <line x1="27.8" y1="43.2" x2="36.2" y2="43.2" />
+        <line x1="26.2" y1="46.4" x2="37.8" y2="46.4" />
+        <line x1="24.8" y1="49.6" x2="39.2" y2="49.6" />
+      </g>
+      <path d="M32 5 L32.82 7.27 L36.23 7.35 L33.33 8.83 L34 11.15 L32 9.8 L30 11.15 L30.67 8.83 L27.77 7.35 L31.18 7.27 Z" fill="#e8c766" />
+    </svg>
+  )
+}
 
 export function Header({ status, onRefresh }: { status: StatusResponse | null; onRefresh: () => void }) {
   const [busy, setBusy] = useState(false)
@@ -64,25 +88,28 @@ export function Header({ status, onRefresh }: { status: StatusResponse | null; o
                 : 'MENYAMBUNGKAN…'
 
   return (
-    <header className="sticky top-0 z-30 border-b border-white/10 bg-[#0b0f14]/95 backdrop-blur supports-[backdrop-filter]:bg-[#0b0f14]/80">
+    <header className="sticky top-0 z-30 border-b border-yellow-500/15 bg-[#14100a]/95 backdrop-blur supports-[backdrop-filter]:bg-[#14100a]/80">
       <div className="mx-auto flex max-w-[1500px] flex-wrap items-center gap-x-4 gap-y-2 px-4 py-3 sm:px-6">
         <div className="flex items-center gap-2.5">
-          <div className="relative flex h-9 w-9 items-center justify-center rounded-lg bg-emerald-500/15 ring-1 ring-emerald-500/40">
-            <Zap className="h-5 w-5 text-emerald-400" />
+          <div className="relative flex h-9 w-9 items-center justify-center rounded-lg bg-yellow-500/10 ring-1 ring-yellow-500/50">
+            <LogoRawagede />
           </div>
           <div>
             <div className="flex items-center gap-2 text-sm font-bold tracking-wide text-white">
-              BLOCXERZ <span className="text-emerald-400">MEXC DESK</span>
+              BLOCXERZ <span className="text-yellow-500">MEXC DESK</span>
               <Badge className="border-0 bg-zinc-800 text-[9px] font-semibold text-zinc-300">v3.0</Badge>
             </div>
-            <div className="text-[10px] text-zinc-500">Signal Engine ICT · FVG · QM · 6 Agent Otonom 24/7</div>
+            <div className="text-[10px] text-zinc-500">
+              Signal Engine ICT · FVG · QM · 6 Agent Otonom 24/7 ·{' '}
+              <span className="text-yellow-600/90">Edisi Monumen Rawagede — Karawang 1947</span>
+            </div>
           </div>
         </div>
 
         <div className="ml-auto flex flex-wrap items-center gap-2">
           <Badge
             className={`gap-1.5 border-0 px-2.5 py-1.5 font-mono text-[10px] font-bold ${
-              running ? 'animate-pulse bg-emerald-500/15 text-emerald-400' : 'bg-zinc-800 text-zinc-400'
+              running ? 'animate-pulse bg-yellow-500/15 text-yellow-400' : 'bg-zinc-800 text-zinc-400'
             }`}
           >
             <Radio className="h-3 w-3" />
@@ -123,7 +150,7 @@ export function Header({ status, onRefresh }: { status: StatusResponse | null; o
             disabled={busy}
             onClick={() => control(running ? 'stop' : 'start')}
             className={`h-8 gap-1.5 border-0 font-semibold ${
-              running ? 'bg-red-500/15 text-red-400 hover:bg-red-500/25' : 'bg-emerald-500 text-black hover:bg-emerald-400'
+              running ? 'bg-red-500/15 text-red-400 hover:bg-red-500/25' : 'bg-yellow-500 text-black hover:bg-yellow-400'
             }`}
           >
             {running ? <Pause className="h-3.5 w-3.5" /> : <Play className="h-3.5 w-3.5" />}

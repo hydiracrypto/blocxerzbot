@@ -16,7 +16,7 @@ function FactorDots({ factors }: { factors: number[] }) {
         <span
           key={i}
           className={`flex h-3.5 w-3.5 items-center justify-center rounded-[3px] text-[7px] font-bold ${
-            f ? 'bg-emerald-500/25 text-emerald-300' : 'bg-white/5 text-zinc-600'
+            f ? 'bg-yellow-500/25 text-yellow-300' : 'bg-white/5 text-zinc-600'
           }`}
         >
           {i + 1}
@@ -31,12 +31,12 @@ export function AnalysisTab({ analyses, signals }: { analyses: AnalysisRow[]; si
     <div className="grid gap-4 lg:grid-cols-5">
       <section aria-label="Analisa strategi" className="lg:col-span-3">
         <div className="mb-2 flex items-center gap-2 text-xs font-semibold text-zinc-300">
-          <BrainCircuit className="h-4 w-4 text-emerald-400" />
+          <BrainCircuit className="h-4 w-4 text-yellow-500" />
           STRATEGY ENGINE · BLOCXERZ v3.0 (8 faktor konfluensi, bar 15m closed)
         </div>
         <div className="max-h-[560px] overflow-y-auto rounded-xl border border-white/10">
           <Table>
-            <TableHeader className="sticky top-0 bg-[#10161d]">
+            <TableHeader className="sticky top-0 bg-[#16120c]">
               <TableRow className="border-white/5 hover:bg-transparent">
                 <TableHead className="h-9 text-[10px] text-zinc-500">PAIR</TableHead>
                 <TableHead className="h-9 text-[10px] text-zinc-500">BIAS</TableHead>

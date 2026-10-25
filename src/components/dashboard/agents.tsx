@@ -29,13 +29,13 @@ export function AgentGrid({ agents }: { agents: AgentStatus[] }) {
           <div
             key={a.id}
             className={`relative overflow-hidden rounded-xl border p-3 transition-colors ${
-              isError ? 'border-red-500/40 bg-red-500/5' : 'border-white/10 bg-white/[0.03] hover:border-emerald-500/30'
+              isError ? 'border-red-500/40 bg-red-500/5' : 'border-white/10 bg-white/[0.03] hover:border-yellow-500/30'
             }`}
           >
             <div className="flex items-center justify-between">
               <div className="flex items-center gap-2">
-                <div className={`flex h-7 w-7 items-center justify-center rounded-md ${isError ? 'bg-red-500/15' : 'bg-emerald-500/12'}`}>
-                  <Icon className={`h-4 w-4 ${isError ? 'text-red-400' : 'text-emerald-400'}`} />
+                <div className={`flex h-7 w-7 items-center justify-center rounded-md ${isError ? 'bg-red-500/15' : 'bg-yellow-500/10 ring-1 ring-yellow-500/30'}`}>
+                  <Icon className={`h-4 w-4 ${isError ? 'text-red-400' : 'text-yellow-400'}`} />
                 </div>
                 <div>
                   <div className="text-[11px] font-bold text-zinc-100">
@@ -55,11 +55,11 @@ export function AgentGrid({ agents }: { agents: AgentStatus[] }) {
                 {isError ? (
                   <AlertTriangle className="h-3 w-3 text-red-400" />
                 ) : isActive ? (
-                  <Loader2 className="h-3 w-3 animate-spin text-emerald-400" />
+                  <Loader2 className="h-3 w-3 animate-spin text-yellow-400" />
                 ) : (
                   <CheckCircle2 className="h-3 w-3 text-zinc-500" />
                 )}
-                <span className={isError ? 'text-red-400' : isActive ? 'text-emerald-400' : 'text-zinc-500'}>{a.status}</span>
+                <span className={isError ? 'text-red-400' : isActive ? 'text-yellow-400' : 'text-zinc-500'}>{a.status}</span>
               </span>
               <span>
                 {a.ticks} tick · {timeAgo(a.lastTickAt)}

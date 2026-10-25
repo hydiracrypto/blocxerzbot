@@ -55,7 +55,7 @@ export function TradesTab({ trades, stats, onRefresh }: { trades: TradeRow[]; st
 
       <div className="mb-2 flex items-center justify-between">
         <div className="flex items-center gap-2 text-xs font-semibold text-zinc-300">
-          <History className="h-4 w-4 text-emerald-400" />
+          <History className="h-4 w-4 text-yellow-500" />
           RIWAYAT PENUTUPAN (partial close TP1/TP2/TP3, SL, flip)
         </div>
         <Button size="sm" variant="outline" onClick={reset} className="h-7 gap-1 border-white/15 text-[10px] text-zinc-300 hover:bg-white/5">
@@ -65,7 +65,7 @@ export function TradesTab({ trades, stats, onRefresh }: { trades: TradeRow[]; st
 
       <div className="max-h-[440px] overflow-y-auto rounded-xl border border-white/10">
         <Table>
-          <TableHeader className="sticky top-0 bg-[#10161d]">
+          <TableHeader className="sticky top-0 bg-[#16120c]">
             <TableRow className="border-white/5 hover:bg-transparent">
               <TableHead className="h-9 text-[10px] text-zinc-500">WAKTU</TableHead>
               <TableHead className="h-9 text-[10px] text-zinc-500">PAIR</TableHead>

@@ -13,12 +13,12 @@ export function ScannerTab({ scanRows, radarRows }: { scanRows: ScanRow[]; radar
     <div className="grid gap-4 lg:grid-cols-5">
       <section aria-label="Market scanner" className="lg:col-span-3">
         <div className="mb-2 flex items-center gap-2 text-xs font-semibold text-zinc-300">
-          <ScanLine className="h-4 w-4 text-emerald-400" />
+          <ScanLine className="h-4 w-4 text-yellow-500" />
           PAIR SCANNER · Semua aset USDT di MEXC (diurut volume 24 jam)
         </div>
         <div className="max-h-[520px] overflow-y-auto rounded-xl border border-white/10">
           <Table>
-            <TableHeader className="sticky top-0 bg-[#10161d]">
+            <TableHeader className="sticky top-0 bg-[#16120c]">
               <TableRow className="border-white/5 hover:bg-transparent">
                 <TableHead className="h-9 text-[10px] text-zinc-500">#</TableHead>
                 <TableHead className="h-9 text-[10px] text-zinc-500">PAIR</TableHead>
@@ -37,7 +37,7 @@ export function ScannerTab({ scanRows, radarRows }: { scanRows: ScanRow[]; radar
                 </TableRow>
               )}
               {scanRows.map((r) => (
-                <TableRow key={r.symbol} className={`border-white/5 font-mono text-[11px] ${r.watched ? 'bg-emerald-500/[0.04]' : ''}`}>
+                <TableRow key={r.symbol} className={`border-white/5 font-mono text-[11px] ${r.watched ? 'bg-yellow-500/[0.04]' : ''}`}>
                   <TableCell className="py-2 text-zinc-500">{r.rank}</TableCell>
                   <TableCell className="py-2 font-semibold text-zinc-100">
                     {r.symbol.replace('_USDT', '')}
@@ -51,7 +51,7 @@ export function ScannerTab({ scanRows, radarRows }: { scanRows: ScanRow[]; radar
                   <TableCell className="py-2 text-right text-zinc-400">{fmtUsd(r.quoteVolume)}</TableCell>
                   <TableCell className="py-2 text-right">
                     {r.watched ? (
-                      <Badge className="border-0 bg-emerald-500/15 text-[9px] font-bold text-emerald-400">DIPANTAU</Badge>
+                      <Badge className="border-0 bg-yellow-500/15 text-[9px] font-bold text-yellow-500">DIPANTAU</Badge>
                     ) : (
                       <span className="text-[9px] text-zinc-600">—</span>
                     )}
@@ -84,7 +84,7 @@ export function ScannerTab({ scanRows, radarRows }: { scanRows: ScanRow[]; radar
               </div>
               <div className="mt-2 h-1.5 overflow-hidden rounded-full bg-white/5">
                 <div
-                  className={`h-full rounded-full ${r.score >= 60 ? 'bg-amber-400' : r.score >= 35 ? 'bg-emerald-500' : 'bg-zinc-600'}`}
+                  className={`h-full rounded-full ${r.score >= 60 ? 'bg-amber-400' : r.score >= 35 ? 'bg-yellow-600' : 'bg-zinc-600'}`}
                   style={{ width: `${Math.min(100, r.score)}%` }}
                 />
               </div>
