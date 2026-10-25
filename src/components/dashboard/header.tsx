@@ -106,7 +106,7 @@ export function Header({ status, onRefresh }: { status: StatusResponse | null; o
           </div>
         </div>
 
-        <div className="ml-auto flex flex-wrap items-center gap-2">
+        <div className="ml-auto flex w-full flex-wrap items-center gap-2 sm:w-auto">
           <Badge
             className={`gap-1.5 border-0 px-2.5 py-1.5 font-mono text-[10px] font-bold ${
               running ? 'animate-pulse bg-yellow-500/15 text-yellow-400' : 'bg-zinc-800 text-zinc-400'
@@ -116,9 +116,9 @@ export function Header({ status, onRefresh }: { status: StatusResponse | null; o
             {running ? 'RUNNING' : 'STOPPED'}
           </Badge>
 
-          <Badge className="border-0 bg-amber-500/10 px-2.5 py-1.5 font-mono text-[10px] font-bold text-amber-400">
-            <Activity className="h-3 w-3" />
-            {srcLabel}
+          <Badge className="order-last w-full min-w-0 border-0 bg-amber-500/10 px-2.5 py-1.5 font-mono text-[10px] font-bold text-amber-400 sm:order-none sm:w-auto">
+            <Activity className="h-3 w-3 shrink-0" />
+            <span className="min-w-0 truncate">{srcLabel}</span>
           </Badge>
 
           {status?.dailyGuard && (
@@ -149,7 +149,7 @@ export function Header({ status, onRefresh }: { status: StatusResponse | null; o
             size="sm"
             disabled={busy}
             onClick={() => control(running ? 'stop' : 'start')}
-            className={`h-8 gap-1.5 border-0 font-semibold ${
+            className={`ml-auto h-8 gap-1.5 border-0 font-semibold sm:ml-0 ${
               running ? 'bg-red-500/15 text-red-400 hover:bg-red-500/25' : 'bg-yellow-500 text-black hover:bg-yellow-400'
             }`}
           >

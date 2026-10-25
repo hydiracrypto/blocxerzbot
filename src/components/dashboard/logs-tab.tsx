@@ -50,7 +50,7 @@ export function LogsTab({ logs }: { logs: LogRow[] }) {
           KONSOL AKTIVITAS 6 AGENT (24/7)
         </div>
         <Select value={filter} onValueChange={setFilter}>
-          <SelectTrigger className="h-7 w-44 border-white/10 bg-white/[0.03] text-[11px]">
+          <SelectTrigger className="h-7 w-full border-white/10 bg-white/[0.03] text-[11px] sm:w-44">
             <SelectValue />
           </SelectTrigger>
           <SelectContent className="border-white/10 bg-[#16120c]">

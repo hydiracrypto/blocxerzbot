@@ -11,34 +11,35 @@ import { fmtPrice, fmtUsd, type RadarRow, type ScanRow } from './base'
 export function ScannerTab({ scanRows, radarRows }: { scanRows: ScanRow[]; radarRows: RadarRow[] }) {
   return (
     <div className="grid gap-4 lg:grid-cols-5">
-      <section aria-label="Market scanner" className="lg:col-span-3">
+      <section aria-label="Market scanner" className="min-w-0 lg:col-span-3">
         <div className="mb-2 flex items-center gap-2 text-xs font-semibold text-zinc-300">
-          <ScanLine className="h-4 w-4 text-yellow-500" />
-          PAIR SCANNER · Semua aset USDT di MEXC (diurut volume 24 jam)
+          <ScanLine className="h-4 w-4 shrink-0 text-yellow-500" />
+          <span>
+            PAIR SCANNER · Semua aset USDT <span className="hidden font-normal text-zinc-500 sm:inline">(diurut volume 24 jam)</span>
+          </span>
         </div>
         <div className="max-h-[520px] overflow-y-auto rounded-xl border border-white/10">
           <Table>
             <TableHeader className="sticky top-0 bg-[#16120c]">
               <TableRow className="border-white/5 hover:bg-transparent">
-                <TableHead className="h-9 text-[10px] text-zinc-500">#</TableHead>
                 <TableHead className="h-9 text-[10px] text-zinc-500">PAIR</TableHead>
                 <TableHead className="h-9 text-right text-[10px] text-zinc-500">HARGA</TableHead>
                 <TableHead className="h-9 text-right text-[10px] text-zinc-500">24J</TableHead>
-                <TableHead className="h-9 text-right text-[10px] text-zinc-500">VOL 24J</TableHead>
+                <TableHead className="hidden h-9 text-right text-[10px] text-zinc-500 sm:table-cell">VOL 24J</TableHead>
                 <TableHead className="h-9 text-right text-[10px] text-zinc-500">STATUS</TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
               {scanRows.length === 0 && (
                 <TableRow>
-                  <TableCell colSpan={6} className="py-10 text-center text-xs text-zinc-500">
+                  <TableCell colSpan={5} className="py-10 text-center text-xs text-zinc-500">
                     Memindai pasar sungguhan…
                   </TableCell>
                 </TableRow>
               )}
               {scanRows.map((r) => (
                 <TableRow key={r.symbol} className={`border-white/5 font-mono text-[11px] ${r.watched ? 'bg-yellow-500/[0.04]' : ''}`}>
-                  <TableCell className="py-2 text-zinc-500">{r.rank}</TableCell>
+                  <TableCell className="hidden py-2 text-zinc-500 sm:table-cell">{r.rank}</TableCell>
                   <TableCell className="py-2 font-semibold text-zinc-100">
                     {r.symbol.replace('_USDT', '')}
                     <span className="text-zinc-500">/USDT</span>
@@ -48,7 +49,7 @@ export function ScannerTab({ scanRows, radarRows }: { scanRows: ScanRow[]; radar
                     {r.changeRate >= 0 ? '+' : ''}
                     {(r.changeRate * 100).toFixed(2)}%
                   </TableCell>
-                  <TableCell className="py-2 text-right text-zinc-400">{fmtUsd(r.quoteVolume)}</TableCell>
+                  <TableCell className="hidden py-2 text-right text-zinc-400 sm:table-cell">{fmtUsd(r.quoteVolume)}</TableCell>
                   <TableCell className="py-2 text-right">
                     {r.watched ? (
                       <Badge className="border-0 bg-yellow-500/15 text-[9px] font-bold text-yellow-500">DIPANTAU</Badge>
@@ -63,10 +64,12 @@ export function ScannerTab({ scanRows, radarRows }: { scanRows: ScanRow[]; radar
         </div>
       </section>
 
-      <section aria-label="Volume radar" className="lg:col-span-2">
+      <section aria-label="Volume radar" className="min-w-0 lg:col-span-2">
         <div className="mb-2 flex items-center gap-2 text-xs font-semibold text-zinc-300">
-          <Radar className="h-4 w-4 text-amber-400" />
-          VOLUME RADAR · Momentum & likuiditas watchlist
+          <Radar className="h-4 w-4 shrink-0 text-amber-400" />
+          <span>
+            VOLUME RADAR · Momentum <span className="hidden font-normal text-zinc-500 sm:inline">& likuiditas watchlist</span>
+          </span>
         </div>
         <div className="max-h-[520px] space-y-2 overflow-y-auto rounded-xl border border-white/10 p-3">
           {radarRows.length === 0 && <div className="py-10 text-center text-xs text-zinc-500">Radar menyala…</div>}

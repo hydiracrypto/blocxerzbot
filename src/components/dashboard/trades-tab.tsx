@@ -53,18 +53,23 @@ export function TradesTab({ trades, stats, onRefresh }: { trades: TradeRow[]; st
         ))}
       </div>
 
-      <div className="mb-2 flex items-center justify-between">
-        <div className="flex items-center gap-2 text-xs font-semibold text-zinc-300">
-          <History className="h-4 w-4 text-yellow-500" />
-          RIWAYAT PENUTUPAN (partial close TP1/TP2/TP3, SL, flip)
+      <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
+        <div className="flex min-w-0 items-center gap-2 text-xs font-semibold text-zinc-300">
+          <History className="h-4 w-4 shrink-0 text-yellow-500" />
+          <span>
+            RIWAYAT PENUTUPAN <span className="hidden font-normal text-zinc-500 sm:inline">(partial close TP1/TP2/TP3, SL, flip)</span>
+          </span>
         </div>
         <Button size="sm" variant="outline" onClick={reset} className="h-7 gap-1 border-white/15 text-[10px] text-zinc-300 hover:bg-white/5">
           <RotateCcw className="h-3 w-3" /> Reset Paper
         </Button>
       </div>
 
-      <div className="max-h-[440px] overflow-y-auto rounded-xl border border-white/10">
-        <Table>
+      {trades.length === 0 ? (
+        <div className="rounded-xl border border-white/10 py-12 text-center text-xs text-zinc-500">Belum ada trade selesai</div>
+      ) : (
+      <div className="max-h-[440px] overflow-x-auto overflow-y-auto rounded-xl border border-white/10">
+        <Table className="min-w-[620px]">
           <TableHeader className="sticky top-0 bg-[#16120c]">
             <TableRow className="border-white/5 hover:bg-transparent">
               <TableHead className="h-9 text-[10px] text-zinc-500">WAKTU</TableHead>
@@ -76,13 +81,6 @@ export function TradesTab({ trades, stats, onRefresh }: { trades: TradeRow[]; st
             </TableRow>
           </TableHeader>
           <TableBody>
-            {trades.length === 0 && (
-              <TableRow>
-                <TableCell colSpan={6} className="py-12 text-center text-xs text-zinc-500">
-                  Belum ada trade selesai
-                </TableCell>
-              </TableRow>
-            )}
             {trades.map((t) => (
               <TableRow key={t.id} className="border-white/5 font-mono text-[11px]">
                 <TableCell className="py-2 text-[10px] text-zinc-500">{clockTime(t.closedAt)}</TableCell>
@@ -105,6 +103,7 @@ export function TradesTab({ trades, stats, onRefresh }: { trades: TradeRow[]; st
           </TableBody>
         </Table>
       </div>
+      )}
     </section>
   )
 }

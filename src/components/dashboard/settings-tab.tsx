@@ -84,17 +84,17 @@ export function SettingsTab({ settings, onSaved }: { settings: SettingsData | nu
           EKSEKUSI PASAR SUNGGUHAN · MEXC FUTURES
         </div>
 
-        <div className="flex items-center justify-between rounded-lg border border-white/10 p-3">
-          <div>
-            <div className="flex items-center gap-2 text-xs font-semibold text-zinc-200">
+        <div className="flex items-center justify-between gap-3 rounded-lg border border-white/10 p-3">
+          <div className="min-w-0">
+            <div className="flex flex-wrap items-center gap-2 text-xs font-semibold text-zinc-200">
               Mode Live (uang riil)
               <Badge className={`border-0 text-[9px] font-bold ${form.mode === 'LIVE' ? 'bg-red-500 text-white' : 'bg-yellow-500/15 text-yellow-400'}`}>
                 {form.mode === 'LIVE' ? 'LIVE · REAL' : 'PAPER · SIMULASI'}
               </Badge>
             </div>
-            <p className="mt-0.5 text-[9px] text-zinc-500">PAPER: simulasi dengan harga pasar riil. LIVE: order riil ke MEXC Futures (butuh API key).</p>
+            <p className="mt-0.5 text-[9px] leading-relaxed text-zinc-500">PAPER: simulasi dengan harga pasar riil. LIVE: order riil ke MEXC Futures (butuh API key).</p>
           </div>
-          <Switch checked={form.mode === 'LIVE'} onCheckedChange={toggleMode} />
+          <Switch checked={form.mode === 'LIVE'} onCheckedChange={toggleMode} className="shrink-0" />
         </div>
 
         <div className="grid gap-3 sm:grid-cols-2">

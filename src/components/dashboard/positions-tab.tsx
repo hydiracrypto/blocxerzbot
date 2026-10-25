@@ -33,11 +33,18 @@ export function PositionsTab({ positions, onRefresh }: { positions: PositionRow[
   return (
     <section aria-label="Posisi terbuka">
       <div className="mb-2 flex items-center gap-2 text-xs font-semibold text-zinc-300">
-        <Crosshair className="h-4 w-4 text-yellow-500" />
-        POSISI TERBUKA ({positions.length}) · Long & Short otomatis sesuai indikator
+        <Crosshair className="h-4 w-4 shrink-0 text-yellow-500" />
+        <span>
+          POSISI TERBUKA ({positions.length}) <span className="hidden font-normal text-zinc-500 sm:inline">· Long &amp; Short otomatis sesuai indikator</span>
+        </span>
       </div>
-      <div className="overflow-x-auto rounded-xl border border-white/10">
-        <Table>
+      {positions.length === 0 ? (
+        <div className="rounded-xl border border-white/10 py-12 text-center text-xs text-zinc-500">
+          Belum ada posisi · bot membuka posisi saat skor konfluensi ≥ 7/8
+        </div>
+      ) : (
+        <div className="overflow-x-auto rounded-xl border border-white/10">
+          <Table className="min-w-[860px]">
           <TableHeader>
             <TableRow className="border-white/5 hover:bg-transparent">
               <TableHead className="h-9 text-[10px] text-zinc-500">PAIR</TableHead>
@@ -53,13 +60,6 @@ export function PositionsTab({ positions, onRefresh }: { positions: PositionRow[
             </TableRow>
           </TableHeader>
           <TableBody>
-            {positions.length === 0 && (
-              <TableRow>
-                <TableCell colSpan={10} className="py-12 text-center text-xs text-zinc-500">
-                  Belum ada posisi · bot membuka posisi saat skor konfluensi ≥ 7/8
-                </TableCell>
-              </TableRow>
-            )}
             {positions.map((p) => (
               <TableRow key={p.id} className="border-white/5 font-mono text-[11px]">
                 <TableCell className="py-2.5 font-bold text-zinc-100">
@@ -106,7 +106,9 @@ export function PositionsTab({ positions, onRefresh }: { positions: PositionRow[
             ))}
           </TableBody>
         </Table>
-      </div>
+        </div>
+      )}
+      {positions.length > 0 && <div className="mt-2 text-[9px] text-zinc-500 sm:hidden">Geser tabel ke samping untuk melihat semua kolom →</div>}
     </section>
   )
 }

@@ -16,8 +16,6 @@ const AGENT_ICONS: Record<string, typeof Bot> = {
   A6: ShieldCheck,
 }
 
-const AGENT_PIPELINE = ['Pair Scanner', 'Volume Radar', 'Strategy Engine', 'Position Sizer', 'Executor', 'Risk Monitor']
-
 export function AgentGrid({ agents }: { agents: AgentStatus[] }) {
   return (
     <section aria-label="Agent otonom" className="grid grid-cols-2 gap-3 sm:grid-cols-3 xl:grid-cols-6">
@@ -37,11 +35,11 @@ export function AgentGrid({ agents }: { agents: AgentStatus[] }) {
                 <div className={`flex h-7 w-7 items-center justify-center rounded-md ${isError ? 'bg-red-500/15' : 'bg-yellow-500/10 ring-1 ring-yellow-500/30'}`}>
                   <Icon className={`h-4 w-4 ${isError ? 'text-red-400' : 'text-yellow-400'}`} />
                 </div>
-                <div>
-                  <div className="text-[11px] font-bold text-zinc-100">
-                    AGENT {i + 1} · {a.name}
+                <div className="min-w-0">
+                  <div className="text-[11px] font-bold text-zinc-100">AGENT {i + 1}</div>
+                  <div className="truncate text-[9px] text-zinc-500" title={a.name}>
+                    {a.name}
                   </div>
-                  <div className="text-[9px] text-zinc-500">{AGENT_PIPELINE[i]}</div>
                 </div>
               </div>
             </div>
@@ -50,8 +48,8 @@ export function AgentGrid({ agents }: { agents: AgentStatus[] }) {
               {a.lastAction}
             </p>
 
-            <div className="mt-2 flex items-center justify-between border-t border-white/5 pt-2 text-[9px] font-mono text-zinc-500">
-              <span className="flex items-center gap-1">
+            <div className="mt-2 flex items-center justify-between gap-2 border-t border-white/5 pt-2 text-[9px] font-mono text-zinc-500">
+              <span className="flex shrink-0 items-center gap-1">
                 {isError ? (
                   <AlertTriangle className="h-3 w-3 text-red-400" />
                 ) : isActive ? (
@@ -61,7 +59,7 @@ export function AgentGrid({ agents }: { agents: AgentStatus[] }) {
                 )}
                 <span className={isError ? 'text-red-400' : isActive ? 'text-yellow-400' : 'text-zinc-500'}>{a.status}</span>
               </span>
-              <span>
+              <span className="min-w-0 truncate text-right" title={`${a.ticks} tick · ${timeAgo(a.lastTickAt)}`}>
                 {a.ticks} tick · {timeAgo(a.lastTickAt)}
               </span>
             </div>

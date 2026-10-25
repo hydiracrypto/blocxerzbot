@@ -80,3 +80,27 @@ Work Log:
 
 Stage Summary:
 - Tema Monumen Rawagede lengkap: logo tugu piramida marmer + tangga & bintang emas, palet granit gelap + emas, semua tab konsisten, nama BLOCXERZ MEXC DESK v3.0 utuh
+
+---
+Task ID: 5
+Agent: Main Agent (Z.ai)
+Task: Perbaiki & rapikan tampilan mobile dashboard (laporan user + screenshot Chrome Android)
+
+Work Log:
+- Reproduksi bug via agent-browser viewport 390px: tab "Sinyal & Analisa" menyebabkan scrollWidth halaman 601px (viewport 390) — akar masalah: grid item (section tabel Strategy Engine) min-width:auto sehingga tidak bisa menyusut di bawah min-content tabel 585px; di HP user Chrome memaksa zoom-out ~68% (teks mengecil semua) + area hitam kanan + semua konten terpotong
+- Fix akar: min-w-0 pada semua grid item (scanner-tab, analysis-tab) + overflow-x: clip di html/body (globals.css) + viewport eksplisit (layout.tsx: width=device-width, initialScale=1, themeColor)
+- layout.tsx: export const viewport: Viewport
+- analysis-tab.tsx: layout DUAL — mobile (<md) kartu per pair (symbol, harga, badge bias, alasan, baris BUY/SELL factor dots 1-8 + skor, Struktur/MTF/QM label-rows); desktop (≥md) tabel 6 kolom seperti semula
+- page.tsx: TabsList grid grid-cols-3 (2 baris × 3 kolom, semua 6 tab terlihat tanpa scroll) → sm:inline-flex satu baris
+- header.tsx: mobile = baris 1 [RUNNING][STOP BOT], baris 2 badge sumber data full-width truncate; desktop urutan normal (RUNNING, sumber, uptime, tombol)
+- agents.tsx: fix badge ACTIVE tumpang-tindih "171 tick · 7 dtk lalu" (shrink-0 + min-w-0 truncate); judul kartu "AGENT n" + subteks nama (hapus duplikasi, tanpa potongan teks)
+- scanner-tab.tsx: kolom # & VOL 24J hidden di <sm; judul dipendekkan di mobile
+- positions-tab.tsx: tabel min-w-[860px] + scroll horizontal + hint "Geser tabel…" (hanya saat ada posisi); empty state di luar tabel
+- trades-tab.tsx: tabel min-w-[620px] + overflow-x; empty state di luar tabel
+- logs-tab.tsx: filter select w-full di mobile; settings-tab.tsx: baris Mode Live gap-3 + switch shrink-0
+- Verifikasi: tsc --noEmit src/ bersih, eslint bersih, screenshot agent-browser 390px SEMUA 6 tab scrollWidth=390 (zero overflow), desktop 1440px tabel lengkap utuh, bot tetap RUNNING (A1-A6 aktif)
+
+Stage Summary:
+- Mobile 390px: tidak ada lagi halaman meluber (601→390), semua tab terlihat, kartu agent tanpa tumpang-tindih, Strategy Engine tampil sebagai kartu mudah dibaca
+- Desktop 1440px: tidak ada perubahan visual (tabel lengkap tetap)
+- Screenshot before/after tersimpan di download/mobile-fix/

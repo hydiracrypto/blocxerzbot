@@ -85,7 +85,7 @@ export default function Page() {
 
         {/* Tabs */}
         <Tabs value={tab} onValueChange={setTab}>
-          <TabsList className="h-9 w-full justify-start gap-1 overflow-x-auto rounded-xl border border-white/10 bg-white/[0.02] p-1 sm:w-fit">
+          <TabsList className="grid h-auto w-full grid-cols-3 gap-1 rounded-xl border border-white/10 bg-white/[0.02] p-1 sm:inline-flex sm:h-9 sm:w-fit sm:justify-start">
             {[
               ['scanner', 'Scanner'],
               ['analysis', 'Sinyal & Analisa'],
@@ -97,7 +97,7 @@ export default function Page() {
               <TabsTrigger
                 key={v}
                 value={v}
-                className={`h-7 rounded-lg px-3 text-[11px] font-semibold ${tab === v ? 'bg-yellow-500 text-black' : 'text-zinc-400 hover:text-zinc-200'}`}
+                className={`h-8 rounded-lg px-2 text-[11px] font-semibold sm:h-7 sm:px-3 ${tab === v ? 'bg-yellow-500 text-black' : 'text-zinc-400 hover:text-zinc-200'}`}
               >
                 {label}
               </TabsTrigger>
