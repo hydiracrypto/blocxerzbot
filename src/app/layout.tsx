@@ -14,9 +14,9 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "NEXUS-6 · Autonomous AI Trading Desk",
-  description: "Bot trading otomatis dengan 6 agent AI: pair scanner, volume radar, rug guard, position sizer, executor, dan journal — mode simulasi paper trading.",
-  keywords: ["trading bot", "AI trading", "paper trading", "multi-agent", "automated trading"],
+  title: "APEX-5 · Real-Market Autonomous Trading Desk",
+  description: "Bot trading otomatis di pasar sungguhan Binance Spot dengan 5 strategi trader legendaris dunia: Turtle (Richard Dennis), Trend Rider (Ed Seykota), Momentum (Marty Schwartz), Macro (Paul Tudor Jones), Mean Reversion (John Bollinger) + Risk Manager.",
+  keywords: ["trading bot", "otomatis", "binance", "crypto", "paper trading", "live trading", "strategi trading", "trend following"],
   icons: {
     icon: "https://z-cdn.chatglm.cn/z-ai/static/logo.svg",
   },

@@ -1,653 +1,885 @@
 // ============================================================
-// NEXUS-6 · Autonomous Trading Engine (paper trading)
-// 6 agent: Scanner → Volume Radar → Rug Guard → Position Sizer
-//          → Executor → Journal
-// Socket.io di port 3003 · emit 'state' tiap tick · terima 'control'
+// APEX-5 · Real-Market Autonomous Trading Engine v2.0
+// Pasar sungguhan: Binance Spot (REST + WebSocket real-time)
+// 5 Master Strategi (trader legendaris dunia) + Risk Manager
+// Eksekusi: PAPER (default) atau LIVE via Binance API keys
+// Socket.io :3003 · emit 'state' tiap detik · terima 'control'
 // ============================================================
 import { createServer } from 'node:http'
 import { Server } from 'socket.io'
-import {
-  Pair, makePair, tickPair, computeRugScore, rnd, irnd, chance, clamp,
-} from './market'
+import { BinanceLive, BinanceMarket, type Candle } from './binance'
+import { atr, ema, rsi as rsiCalc } from './indicators'
+import { MASTERS, MASTER_BY_ID, type MarketCtx, type StrategyPosition } from './strategies'
+import { store } from './store'
 import type {
-  ActivityItem, AgentId, AgentView, ControlAction, EngineState, LogLevel, PositionView, TradeView, WatchPair,
+  ActivityItem, ControlAction, EngineState, LogLevel, MarketSymbol, MasterId, MasterView,
+  PairDecision, PositionView, SettingsView, StatsView, TradeMode, TradeView,
 } from '../../src/lib/engine-types'
 
 const PORT = 3003
 const TICK_MS = 1000
-const START_EQUITY = 14.82 // penghormatan untuk tweet: "$14.82 → $7,643"
-const MAX_OPEN = 4
-const MAX_PAIRS = 26
+const ENGINE_VERSION = 'APEX-5 v2.0.0-realmarket'
 
-const AGENT_META: { id: AgentId; name: string; icon: string; role: string }[] = [
-  { id: 'scanner', name: 'Pair Scanner', icon: 'radar', role: 'Memindai listing baru di 6 chain' },
-  { id: 'volume', name: 'Volume Radar', icon: 'zap', role: 'Deteksi lonjakan volume (z-score)' },
-  { id: 'rug', name: 'Rug Guard', icon: 'shield', role: 'Audit honeypot, LP lock, holder' },
-  { id: 'sizer', name: 'Position Sizer', icon: 'scale', role: 'Sizing berbasis risiko & Kelly' },
-  { id: 'executor', name: 'Executor', icon: 'crosshair', role: 'Entry/exit dengan slippage nyata' },
-  { id: 'journal', name: 'Journal', icon: 'notebook', role: 'Mencatat setiap keputusan + alasan' },
-]
+const ALL_SYMBOLS = ['BTCUSDT', 'ETHUSDT', 'BNBUSDT', 'SOLUSDT', 'XRPUSDT', 'DOGEUSDT', 'ADAUSDT', 'AVAXUSDT', 'LINKUSDT', 'DOTUSDT']
+const BASE_MAP = Object.fromEntries(ALL_SYMBOLS.map((s) => [s, s.replace('USDT', '')]))
+const STRAT_NAME = Object.fromEntries(MASTERS.map((m) => [m.id, m.name])) as Record<string, string>
+const TAKER_FEE = 0.001 // 0.1% per sisi
+
+interface Defaults {
+  mode: TradeMode
+  apiKey: string
+  apiSecret: string
+  testnet: boolean
+  riskPerTradePct: number
+  maxOpenPositions: number
+  dailyLossLimitPct: number
+  startingEquity: number
+}
 
 interface Position {
   id: string
-  pairId: string
   symbol: string
-  chain: string
-  origSize: number
-  sizeUsd: number
+  strategy: MasterId
+  qty: number
+  sizeUsd: number // notional awal
   entryPrice: number
-  slippagePct: number
-  stopPct: number
-  tp1Pct: number
-  peakPnlPct: number
-  partialTaken: boolean
-  realizedPnlUsd: number
-  openedTick: number
+  stopPrice: number
+  tpPrice: number
+  peakPrice: number
+  feeEntryUsd: number
+  mode: TradeMode
+  openedAt: number
   thesis: string
 }
 
-interface Stats {
-  trades: number
-  wins: number
-  losses: number
-  grossWin: number
-  grossLoss: number
-  sumPnlPct: number
-  sumWinPct: number
-  sumLossPct: number
-  sumSlip: number
-  best: number
-  worst: number
-  streak: number
-  bestStreak: number
-  rejectedRugs: number
-  lastMilestone: number
+interface MasterStat {
+  decisions: number
+  status: string
+  lastAction: string
+  lastActionTs: number
+  heat: number
 }
 
-interface State {
-  status: 'RUNNING' | 'PAUSED'
-  speed: number
-  tick: number
-  startedAt: number
-  cash: number
-  equity: number
-  peakEquity: number
-  maxDD: number
-  pairs: Pair[]
-  positions: Position[]
-  trades: TradeView[]
-  activity: ActivityItem[]
-  rugQueue: Pair[]
-  approved: { pair: Pair; score: number; confidence: number }[]
-  agents: Record<AgentId, { status: string; lastAction: string; lastActionTick: number; decisions: number; heat: number }>
-  stats: Stats
+let settings: Defaults = {
+  mode: 'PAPER',
+  apiKey: '',
+  apiSecret: '',
+  testnet: true,
+  riskPerTradePct: 2,
+  maxOpenPositions: 5,
+  dailyLossLimitPct: 6,
+  startingEquity: 1000,
 }
 
-let S: State
+const market = new BinanceMarket(ALL_SYMBOLS)
+const live = new BinanceLive()
+
+let S_status: 'RUNNING' | 'PAUSED' = 'RUNNING'
+let tick = 0
+let cash = settings.startingEquity
+let equity = settings.startingEquity
+let peakEquity = settings.startingEquity
+let maxDD = 0
+let positions: Position[] = []
+let trades: TradeView[] = []
+let stats: StatsView = freshStats()
+let activity: ActivityItem[] = []
+let equityCurve: { t: number; e: number }[] = []
+let masterStats = new Map<MasterId, MasterStat>()
+let atrMap = new Map<string, number>()
+let decisionMap = new Map<string, { decision: PairDecision; reason: string; ts: number }>()
+let lastExitAt = new Map<string, number>() // symbol|master → ts
+let focusSymbol = 'BTCUSDT'
+let liveConnected = false
+let liveBalanceUsd: number | null = null
+let dayStartEquity = settings.startingEquity
+let dayKey = dayString()
+let startedAt = Date.now()
+let entriesBlocked = false
+let blockReason = ''
+let liveOrderBusy = false
+
+function freshStats(): StatsView {
+  return {
+    trades: 0, wins: 0, losses: 0, winRate: 0, profitFactor: 0, expectancyPct: 0,
+    avgWinPct: 0, avgLossPct: 0, bestTradePct: 0, worstTradePct: 0, streak: 0, bestStreak: 0, feesUsd: 0,
+  }
+}
 
 // ---------- logging ----------
 let logSeq = 0
-function log(agent: AgentId, level: LogLevel, msg: string) {
-  const item: ActivityItem = {
-    id: `${Date.now()}-${logSeq++}`,
-    ts: Date.now(),
-    tick: S.tick,
-    agent,
-    level,
-    msg,
-  }
-  S.activity.push(item)
-  if (S.activity.length > 90) S.activity.splice(0, S.activity.length - 90)
+function log(agent: MasterId, level: LogLevel, msg: string) {
+  activity.push({ id: `${Date.now()}-${logSeq++}`, ts: Date.now(), agent, level, msg })
+  if (activity.length > 140) activity.splice(0, activity.length - 140)
 }
 
-function setAgent(id: AgentId, status: string, action: string) {
-  const a = S.agents[id]
-  a.status = status
-  a.lastAction = action
-  a.lastActionTick = S.tick
-  a.decisions++
-  a.heat = 1
+function setMaster(id: MasterId, status: string, action: string) {
+  const m = masterStats.get(id)
+  if (!m) return
+  m.status = status
+  m.lastAction = action
+  m.lastActionTs = Date.now()
+  m.decisions++
+  m.heat = 1
 }
 
-function markInteresting(p: Pair) {
-  p.lastInterestingTick = S.tick
+function dayString(): string {
+  return new Date().toISOString().slice(0, 10)
 }
 
-// ---------- init ----------
-function initState() {
-  S = {
-    status: 'RUNNING',
-    speed: 1,
-    tick: 0,
-    startedAt: Date.now(),
-    cash: START_EQUITY,
-    equity: START_EQUITY,
-    peakEquity: START_EQUITY,
-    maxDD: 0,
-    pairs: [],
-    positions: [],
-    trades: [],
-    activity: [],
-    rugQueue: [],
-    approved: [],
-    agents: Object.fromEntries(
-      AGENT_META.map((m) => [m.id, { status: 'Siap', lastAction: 'Inisialisasi sistem', lastActionTick: 0, decisions: 0, heat: 0 }]),
-    ) as State['agents'],
-    stats: {
-      trades: 0, wins: 0, losses: 0, grossWin: 0, grossLoss: 0, sumPnlPct: 0,
-      sumWinPct: 0, sumLossPct: 0, sumSlip: 0, best: 0, worst: 0, streak: 0,
-      bestStreak: 0, rejectedRugs: 0, lastMilestone: 1,
-    },
+// ---------- indicator context ----------
+function ctxFor(symbol: string): MarketCtx | null {
+  const cs = market.getClosed(symbol)
+  if (cs.length < 30) return null
+  const a = atr(cs, 14)
+  const atrVal = a[a.length - 1]
+  atrMap.set(symbol, Number.isFinite(atrVal) ? atrVal : 0)
+  return {
+    symbol,
+    candles: cs,
+    livePrice: market.price(symbol),
+    atr14: Number.isFinite(atrVal) ? atrVal : 0,
+    equity,
   }
-  logSeq = 0
-  // pasar awal
-  for (let i = 0; i < 14; i++) {
-    const p = makePair(0)
-    p.age = irnd(6, 40)
-    for (let k = 0; k < 10; k++) p.volHist.push(p.liquidity * rnd(0.015, 0.05))
-    p.rugScore = computeRugScore(p).score
-    S.pairs.push(p)
-  }
-  // warmup pasar tanpa log
-  for (let t = 1; t <= 24; t++) S.pairs.forEach((p) => tickPair(p, t))
-  S.pairs.forEach((p) => { p.rugScore = computeRugScore(p).score })
-  S.tick = 0
-  log('scanner', 'info', `Sesi dimulai — modal awal $${START_EQUITY.toFixed(2)} · memindai ${S.pairs.length} pair aktif di 6 chain`)
-  log('journal', 'info', 'Journal aktif — setiap keputusan agent dicatat beserta alasannya')
 }
 
-// ---------- pipeline steps ----------
-function scannerStep() {
-  const active = S.pairs.filter((p) => p.status !== 'dead')
-  if (S.pairs.length < MAX_PAIRS && chance(0.34)) {
-    const p = makePair(S.tick)
-    p.rugScore = computeRugScore(p).score
-    S.pairs.push(p)
-    markInteresting(p)
-    setAgent('scanner', 'Memindai', `Listing baru: ${p.symbol}/${p.chain}`)
-    log('scanner', 'info', `LISTING BARU ${p.symbol}/${p.chain} · liq $${(p.liquidity / 1000).toFixed(1)}k · holder ${p.holders} · umur ${p.age} tick`)
-  } else {
-    setAgent('scanner', 'Memindai', `${active.length} pair aktif dipantau`)
-  }
-  if (S.tick % 14 === 7) {
-    const hot = S.pairs.filter((p) => p.phase === 'spike' || p.phase === 'pump').length
-    log('scanner', 'info', `Scan selesai — ${active.length} pair aktif · ${hot} sedang panas · ${S.pairs.filter((p) => p.status === 'dead').length} mati`)
-  }
-  // prune dead (maks 2 per tick)
-  let pruned = 0
-  S.pairs = S.pairs.filter((p) => {
-    if (p.status === 'dead' && p.phase === 'dead' && p.phaseT > 4 && pruned < 2) { pruned++; usedAck(p); return false }
+// ---------- risk manager (global) ----------
+const risk = {
+  refreshDaily() {
+    const today = dayString()
+    if (today !== dayKey) {
+      dayKey = today
+      dayStartEquity = equity
+      if (entriesBlocked && blockReason.includes('Daily loss limit')) {
+        entriesBlocked = false
+        blockReason = ''
+        log('risk', 'info', 'Hari baru — blokir entry harian dicabut, sistem kembali penuh')
+      }
+    }
+  },
+  dailyPnlUsd(): number {
+    return equity - dayStartEquity
+  },
+  dailyPnlPct(): number {
+    return dayStartEquity > 0 ? ((equity - dayStartEquity) / dayStartEquity) * 100 : 0
+  },
+  checkEntryGate(): boolean {
+    if (entriesBlocked) return false
+    const dp = this.dailyPnlPct()
+    if (dp <= -settings.dailyLossLimitPct) {
+      entriesBlocked = true
+      blockReason = `Daily loss limit ${settings.dailyLossLimitPct}% tercapai (${dp.toFixed(2)}%) — entry baru diblokir (aturan PTJ: pertahankan modal)`
+      log('risk', 'danger', `🛡️ RISK GUARD — ${blockReason}`)
+      setMaster('risk', 'Menahan', 'Blokir entry — loss harian')
+      return false
+    }
+    if (equity <= settings.startingEquity * 0.6) {
+      entriesBlocked = true
+      blockReason = 'Ekuitas jatuh 40% dari modal awal — auto-pause untuk investigasi'
+      log('risk', 'danger', '🛡️ RISK GUARD — ekuitas -40%, sistem dibekukan sementara')
+      S_status = 'PAUSED'
+      return false
+    }
     return true
+  },
+  approve(symbol: string, master: MasterId, notional: number): { ok: boolean; why: string } {
+    if (positions.length >= settings.maxOpenPositions) return { ok: false, why: `slot penuh ${positions.length}/${settings.maxOpenPositions}` }
+    if (positions.some((p) => p.symbol === symbol && p.strategy === master)) return { ok: false, why: 'posisi master di simbol ini sudah ada' }
+    const perSymbol = positions.filter((p) => p.symbol === symbol).length
+    if (perSymbol >= 2) return { ok: false, why: 'maks 2 posisi per simbol' }
+    if (notional < 11) return { ok: false, why: `notional $${notional.toFixed(2)} di bawah minimum bursa $10` }
+    if (mode() === 'PAPER' && notional > cash * 0.95) return { ok: false, why: 'kas tidak cukup' }
+    if (notional > equity * 0.25) return { ok: false, why: 'notional > 25% ekuitas (konsentrasi)' }
+    return { ok: true, why: 'disetujui' }
+  },
+}
+
+function mode(): TradeMode {
+  return settings.mode
+}
+
+// ---------- execution ----------
+async function openPosition(sig: { master: MasterId; stopDist: number; takeProfitDist: number; riskPct: number; reason: string }, symbol: string) {
+  const m = MASTER_BY_ID.get(sig.master)!
+  const price = market.price(symbol)
+  if (!price || price <= 0) return
+  const gate = risk.checkEntryGate()
+  if (!gate) return
+  const riskPct = Math.min(sig.riskPct, settings.riskPerTradePct)
+  const riskUsd = equity * (riskPct / 100)
+  let notional = riskUsd / (sig.stopDist / price)
+  notional = Math.min(notional, equity * 0.25, mode() === 'PAPER' ? cash * 0.95 : notional)
+  const minNota = mode() === 'LIVE' ? live.minNotional(symbol) : 11
+  if (notional < minNota) {
+    setMaster('risk', 'Menahan', `${symbol} ukuran <$${minNota.toFixed(0)}`)
+    return
+  }
+  const approval = risk.approve(symbol, sig.master, notional)
+  if (!approval.ok) {
+    setMaster(sig.master, 'Sinyal', `${symbol} ditunda — ${approval.why}`)
+    log(sig.master, 'warn', `SINYAL ${symbol} ditolak Risk Manager — ${approval.why} · ${sig.reason.split('—')[0]}`)
+    decisionMap.set(symbol, { decision: 'SIGNAL', reason: `Sinyal ditunda: ${approval.why}`, ts: Date.now() })
+    return
+  }
+
+  setMaster('risk', 'Mengawasi', `Approve ${symbol} ${m.trader} — risiko ${riskPct.toFixed(1)}%`)
+  log('risk', 'info', `APPROVAL ${symbol} · ${m.trader} · notional $${notional.toFixed(2)} · risiko ${riskPct.toFixed(1)}% ($${riskUsd.toFixed(2)}) · SL -${((sig.stopDist / price) * 100).toFixed(2)}% · TP +${((sig.takeProfitDist / price) * 100).toFixed(2)}%`)
+
+  const isLive = mode() === 'LIVE' && live.configured
+  let entryPrice = price
+  let qty = notional / price
+  let feeEntry = notional * TAKER_FEE
+
+  if (isLive) {
+    if (liveOrderBusy) return
+    liveOrderBusy = true
+    try {
+      const r = await live.marketBuy(symbol, notional)
+      if (!r.ok || r.executedQty <= 0) {
+        log(sig.master, 'danger', `LIVE BUY ${symbol} GAGAL — ${r.error ?? 'qty 0'} · sinyal dibatalkan`)
+        setMaster('risk', 'Error', 'LIVE BUY gagal')
+        liveOrderBusy = false
+        return
+      }
+      entryPrice = r.avgPrice
+      qty = r.executedQty
+      feeEntry = r.cummulativeQuoteQty * TAKER_FEE
+      log('risk', 'success', `LIVE BUY terisi ${symbol} — qty ${qty.toPrecision(6)} @ avg $${r.avgPrice.toPrecision(8)} · order #${r.orderId}`)
+    } finally {
+      liveOrderBusy = false
+    }
+  } else {
+    const slip = 0.0002 + Math.random() * 0.0004 // 0.02–0.06% (buku likuid)
+    entryPrice = price * (1 + slip)
+    qty = notional / entryPrice
+  }
+
+  const pos: Position = {
+    id: `${symbol}-${sig.master}-${Date.now().toString(36)}`,
+    symbol,
+    strategy: sig.master,
+    qty,
+    sizeUsd: qty * entryPrice,
+    entryPrice,
+    stopPrice: entryPrice - sig.stopDist,
+    tpPrice: entryPrice + sig.takeProfitDist,
+    peakPrice: entryPrice,
+    feeEntryUsd: feeEntry,
+    mode: isLive ? 'LIVE' : 'PAPER',
+    openedAt: Date.now(),
+    thesis: sig.reason,
+  }
+  positions.push(pos)
+  if (!isLive) cash -= pos.sizeUsd + feeEntry
+
+  setMaster(sig.master, 'Posisi', `LONG ${symbol} @ $${entryPrice.toPrecision(8)}`)
+  log(sig.master, 'trade', `ENTER LONG ${symbol} — $${(qty * entryPrice).toFixed(2)} @ $${entryPrice.toPrecision(8)} · SL $${pos.stopPrice.toPrecision(8)} · TP $${pos.tpPrice.toPrecision(8)} · ${m.name} (${m.trader})`)
+  log('risk', 'success', `Posisi terbuka ${positions.length}/${settings.maxOpenPositions} · eksposur $${positions.reduce((a, p) => a + p.qty * market.price(p.symbol), 0).toFixed(2)}`)
+  decisionMap.set(symbol, { decision: 'ENTER', reason: `Posisi ${m.trader} dibuka`, ts: Date.now() })
+
+  void store.insertTrade({
+    id: pos.id,
+    symbol,
+    strategy: sig.master,
+    sizeUsd: pos.sizeUsd,
+    qty,
+    entryPrice,
+    feeUsd: feeEntry,
+    reason: sig.reason.slice(0, 250),
+    status: 'OPEN',
+    mode: pos.mode,
+    entryTime: pos.openedAt,
+    meta: JSON.stringify({ stopPrice: pos.stopPrice, tpPrice: pos.tpPrice, peakPrice: pos.peakPrice, thesis: pos.thesis }),
   })
 }
 
-const usedAck = (_: Pair) => { /* noop — pair dikembalikan ke pool nama */ }
+async function closePosition(pos: Position, exitPrice: number, reason: string, extraFeeUsd = 0) {
+  const m = MASTER_BY_ID.get(pos.strategy)!
+  const isLive = pos.mode === 'LIVE'
+  let feeExit = pos.qty * exitPrice * TAKER_FEE + extraFeeUsd
 
-function volumeStep() {
-  let flagged = 0
-  for (const p of S.pairs) {
-    if (flagged >= 2) break
-    if (p.status !== 'watch' || p.queued || p.phase === 'dead' || p.phase === 'rug') continue
-    if (p.liquidity < 15000) continue
-    if (p.z >= 2.2 && (p.phase === 'spike' || p.phase === 'pump')) {
-      p.queued = true
-      p.decision = 'ANALYZING'
-      p.reason = `Volume spike +${p.spikePct.toFixed(0)}% (z=${p.z.toFixed(1)}) — audit keamanan`
-      S.rugQueue.push(p)
-      flagged++
-      markInteresting(p)
-      setAgent('volume', 'Memantau', `Spike ${p.symbol} +${p.spikePct.toFixed(0)}%`)
-      log('volume', 'warn', `VOLUME SPIKE ${p.symbol}/${p.chain} +${p.spikePct.toFixed(0)}% (z=${p.z.toFixed(1)}) — kirim ke Rug Guard`)
+  if (isLive) {
+    if (liveOrderBusy) return
+    liveOrderBusy = true
+    try {
+      const r = await live.marketSell(pos.symbol, pos.qty)
+      if (!r.ok || r.executedQty <= 0) {
+        log(pos.strategy, 'danger', `LIVE SELL ${pos.symbol} GAGAL — ${r.error ?? 'qty 0'} · akan dicoba ulang tick berikutnya`)
+        liveOrderBusy = false
+        return
+      }
+      exitPrice = r.avgPrice
+      feeExit = r.cummulativeQuoteQty * TAKER_FEE
+      log('risk', 'success', `LIVE SELL terisi ${pos.symbol} — qty ${r.executedQty.toPrecision(6)} @ avg $${r.avgPrice.toPrecision(8)} · order #${r.orderId}`)
+    } finally {
+      liveOrderBusy = false
     }
   }
-  if (flagged === 0) setAgent('volume', 'Memantau', `Baseline normal · z maks ${(Math.max(0, ...S.pairs.map((p) => p.z))).toFixed(1)}`)
-}
 
-function rugStep() {
-  let processed = 0
-  while (S.rugQueue.length && processed < 2) {
-    const p = S.rugQueue.shift()!
-    p.queued = false
-    processed++
-    const res = computeRugScore(p)
-    p.rugScore = res.score
-    if (p.honeypot) {
-      p.status = 'rejected'
-      p.decision = 'REJECT'
-      p.reason = 'Honeypot terdeteksi — sell diblokir kontrak'
-      S.stats.rejectedRugs++
-      markInteresting(p)
-      setAgent('rug', 'Mengaudit', `REJECT ${p.symbol} (honeypot)`)
-      log('rug', 'danger', `REJECT ${p.symbol}/${p.chain} — honeypot! Kontrak memblokir sell · skor ${res.score}/100`)
-      continue
-    }
-    if (res.score >= 55) {
-      p.status = 'rejected'
-      p.decision = 'REJECT'
-      const fails = res.notes.filter((n) => !n.pass).map((n) => n.label).slice(0, 2).join(' · ')
-      p.reason = `Skor risiko ${res.score}/100 — ${fails}`
-      S.stats.rejectedRugs++
-      markInteresting(p)
-      setAgent('rug', 'Mengaudit', `REJECT ${p.symbol} (${res.score}/100)`)
-      log('rug', 'danger', `REJECT ${p.symbol}/${p.chain} — skor risiko ${res.score}/100 · ${fails}`)
-      continue
-    }
-    const confidence = clamp((58 - res.score) / 58, 0.25, 0.95)
-    p.decision = 'WAIT'
-    p.reason = `Lolos audit (skor ${res.score}/100) — menunggu sizing`
-    S.approved.push({ pair: p, score: res.score, confidence })
-    markInteresting(p)
-    setAgent('rug', 'Mengaudit', `PASS ${p.symbol} (${res.score}/100)`)
-    const ok = res.notes.filter((n) => n.pass).map((n) => n.label).slice(0, 3).join(' · ')
-    log('rug', 'success', `PASS ${p.symbol}/${p.chain} — skor ${res.score}/100 · ${ok}`)
-  }
-  if (processed === 0 && S.rugQueue.length === 0) setAgent('rug', 'Standby', 'Tidak ada antrean audit')
-}
+  const grossPnl = pos.qty * (exitPrice - pos.entryPrice)
+  const pnlUsd = grossPnl - pos.feeEntryUsd - feeExit
+  const pnlPct = (pnlUsd / pos.sizeUsd) * 100
+  if (!isLive) cash += pos.qty * exitPrice - feeExit
 
-function sizerStep() {
-  while (S.approved.length) {
-    if (S.positions.length >= MAX_OPEN) {
-      const next = S.approved[0]
-      setAgent('sizer', 'Menghitung', `Slot penuh ${S.positions.length}/${MAX_OPEN}`)
-      log('sizer', 'warn', `Slot penuh (${S.positions.length}/${MAX_OPEN}) — ${next.pair.symbol} ditunda`)
-      next.pair.reason = 'Slot posisi penuh — ditunda'
-      break
-    }
-    const { pair: p, score, confidence } = S.approved.shift()!
-    if (p.phase !== 'spike' && p.phase !== 'pump') {
-      p.decision = 'SKIP'
-      p.reason = 'Momentum sudah lewat sebelum sizing selesai'
-      markInteresting(p)
-      log('sizer', 'warn', `SKIP ${p.symbol} — momentum habis sebelum eksekusi (fase ${p.phase})`)
-      continue
-    }
-    const riskPct = clamp(1.2 + confidence * 2.8 + (p.phase === 'pump' ? 0.4 : 0), 1.2, 4.4)
-    const stopPct = rnd(8, 11.5)
-    const riskUsd = S.equity * (riskPct / 100)
-    let notional = riskUsd / (stopPct / 100)
-    notional = Math.min(notional, S.equity * 0.35, S.cash * 0.92)
-    if (notional < 3 || S.cash < 3) {
-      p.decision = 'SKIP'
-      p.reason = `Ukuran $${notional.toFixed(2)} di bawah minimum eksekusi`
-      markInteresting(p)
-      log('sizer', 'warn', `SKIP ${p.symbol} — ukuran $${notional.toFixed(2)} terlalu kecil (risiko dibatasi)`)
-      continue
-    }
-    setAgent('sizer', 'Menghitung', `Size ${p.symbol} $${notional.toFixed(2)}`)
-    log('sizer', 'info', `SIZE ${p.symbol}/${p.chain} — risiko ${riskPct.toFixed(1)}% ($${riskUsd.toFixed(2)}) · notional $${notional.toFixed(2)} · SL -${stopPct.toFixed(1)}% · TP1 +16% · skor ${score}/100`)
-    executeEntry(p, notional, stopPct)
-  }
-  if (!S.approved.length && !S.rugQueue.length && chance(0.25)) {
-    setAgent('sizer', 'Standby', `Kas $${S.cash.toFixed(2)} · ${S.positions.length}/${MAX_OPEN} slot`)
-  }
-}
+  positions = positions.filter((p) => p.id !== pos.id)
+  lastExitAt.set(`${pos.symbol}|${pos.strategy}`, Date.now())
 
-// ---------- executor ----------
-function slipFor(p: Pair): number {
-  return clamp(0.12 + (25000 / p.liquidity) * rnd(0.25, 0.7) + (p.phase === 'pump' ? 0.25 : 0), 0.1, 2.4)
-}
-
-function executeEntry(p: Pair, notional: number, stopPct: number) {
-  const slip = slipFor(p)
-  const entry = p.price * (1 + slip / 100)
-  const pos: Position = {
-    id: Math.random().toString(36).slice(2, 10),
-    pairId: p.id,
-    symbol: p.symbol,
-    chain: p.chain,
-    origSize: notional,
-    sizeUsd: notional,
-    entryPrice: entry,
-    slippagePct: slip,
-    stopPct,
-    tp1Pct: 16,
-    peakPnlPct: 0,
-    partialTaken: false,
-    realizedPnlUsd: 0,
-    openedTick: S.tick,
-    thesis: `Vol spike +${p.spikePct.toFixed(0)}% (z=${p.z.toFixed(1)}) · liq $${(p.liquidity / 1000).toFixed(0)}k · rug ${p.rugScore}/100 · fase ${p.phase}`,
-  }
-  S.cash -= notional
-  S.positions.push(pos)
-  p.status = 'held'
-  p.decision = 'ENTER'
-  p.reason = `Posisi terbuka $${notional.toFixed(2)} @ slip ${slip.toFixed(2)}%`
-  markInteresting(p)
-  setAgent('executor', 'Mengeksekusi', `LONG ${p.symbol} $${notional.toFixed(2)}`)
-  log('executor', 'trade', `ENTER LONG ${p.symbol}/${p.chain} — $${notional.toFixed(2)} @ ${fmtPrice(entry)} (slip ${slip.toFixed(2)}%) · SL -${stopPct.toFixed(1)}% · TP1 +16%`)
-}
-
-function fmtPrice(v: number): string {
-  if (v >= 1) return `$${v.toFixed(2)}`
-  if (v >= 0.01) return `$${v.toFixed(4)}`
-  if (v >= 0.0001) return `$${v.toFixed(6)}`
-  return `$${v.toExponential(2)}`
-}
-
-function closePosition(pos: Position, pair: Pair | undefined, pnlPct: number, reason: string, extraSlip = 0) {
-  const exitSlip = clamp(slipFactor(pair) + extraSlip, 0.1, 8)
-  const proceeds = pos.sizeUsd * (1 + pnlPct / 100)
-  S.cash += Math.max(proceeds, 0)
-  const totalPnlUsd = pos.realizedPnlUsd + (proceeds - pos.sizeUsd)
-  const totalPnlPct = (totalPnlUsd / pos.origSize) * 100
   const trade: TradeView = {
     id: pos.id,
     symbol: pos.symbol,
-    chain: pos.chain,
-    sizeUsd: pos.origSize,
+    strategy: pos.strategy,
+    strategyName: STRAT_NAME[pos.strategy] ?? pos.strategy,
+    sizeUsd: pos.sizeUsd,
     entryPrice: pos.entryPrice,
-    exitPrice: pos.entryPrice * (1 + pnlPct / 100) * (1 - exitSlip / 100),
-    slippagePct: pos.slippagePct,
-    pnlUsd: totalPnlUsd,
-    pnlPct: totalPnlPct,
+    exitPrice,
+    pnlUsd,
+    pnlPct,
+    feeUsd: pos.feeEntryUsd + feeExit,
     reason,
-    win: totalPnlUsd > 0,
-    openedTick: pos.openedTick,
-    closedTick: S.tick,
-    holdTicks: S.tick - pos.openedTick,
+    win: pnlUsd > 0,
+    mode: pos.mode,
+    entryTime: pos.openedAt,
+    exitTime: Date.now(),
+    holdMin: Math.round((Date.now() - pos.openedAt) / 60000),
   }
-  S.trades.push(trade)
-  if (S.trades.length > 60) S.trades.shift()
-  S.positions = S.positions.filter((x) => x.id !== pos.id)
-  if (pair) {
-    pair.status = 'watch'
-    pair.decision = 'WAIT'
-    pair.reason = `Ditutup ${trade.pnlPct >= 0 ? '+' : ''}${trade.pnlPct.toFixed(1)}% — ${reason}`
-    markInteresting(pair)
-  }
-  journalClose(trade)
-  setAgent('executor', 'Mengeksekusi', `CLOSE ${pos.symbol} ${totalPnlPct >= 0 ? '+' : ''}${totalPnlPct.toFixed(1)}%`)
-  log('executor', 'trade', `EXIT LONG ${pos.symbol}/${pair?.chain ?? pos.chain} — ${totalPnlPct >= 0 ? '+' : ''}${totalPnlPct.toFixed(1)}% (${totalPnlUsd >= 0 ? '+' : '-'}$${Math.abs(totalPnlUsd).toFixed(2)}) @ ${fmtPrice(trade.exitPrice)} · ${reason} · slip exit ${exitSlip.toFixed(2)}% · ${trade.holdTicks} tick`)
+  trades.unshift(trade)
+  if (trades.length > 80) trades.pop()
+  updateStats(trade)
+
+  const winTag = trade.win ? 'WIN' : 'LOSS'
+  setMaster(pos.strategy, trade.win ? 'Profit' : 'Cut', `${winTag} ${pos.symbol} ${pnlPct >= 0 ? '+' : ''}${pnlPct.toFixed(2)}%`)
+  log(pos.strategy, trade.win ? 'success' : 'warn', `EXIT LONG ${pos.symbol} ${winTag} ${pnlPct >= 0 ? '+' : ''}${pnlPct.toFixed(2)}% (${pnlUsd >= 0 ? '+' : '-'}$${Math.abs(pnlUsd).toFixed(2)}) @ $${exitPrice.toPrecision(8)} · ${reason} · hold ${trade.holdMin}m`)
+  decisionMap.set(pos.symbol, { decision: 'EXIT', reason: `${winTag} ${pnlPct.toFixed(1)}% — ${reason}`, ts: Date.now() })
+
+  void store.closeTrade(pos.id, {
+    exitPrice,
+    pnlUsd,
+    pnlPct,
+    feeUsd: trade.feeUsd,
+    reason,
+    exitTime: trade.exitTime,
+  })
 }
 
-function slipFactor(pair: Pair | undefined): number {
-  if (!pair) return rnd(0.4, 1.2)
-  return clamp(0.12 + (25000 / pair.liquidity) * rnd(0.3, 0.8), 0.1, 6)
-}
-
-function executorStep() {
-  for (const pos of [...S.positions]) {
-    const pair = S.pairs.find((p) => p.id === pos.pairId)
-    const mark = pair ? pair.price : pos.entryPrice
-    const pnlPct = (mark / pos.entryPrice - 1) * 100
-    pos.peakPnlPct = Math.max(pos.peakPnlPct, pnlPct)
-
-    // 1) RUG DETECTED — exit darurat dengan slippage ekstra
-    if (pair && pair.phase === 'rug') {
-      log('executor', 'danger', `RUG DETECTED ${pos.symbol}/${pair.chain} — harga anjlok, eksekusi exit darurat!`)
-      closePosition(pos, pair, pnlPct * (1 - rnd(0.02, 0.07)), 'RUG EXIT — exit darurat', rnd(1.5, 5))
-      continue
-    }
-    // 2) Stop loss
-    if (pnlPct <= -pos.stopPct) {
-      closePosition(pos, pair, pnlPct, 'STOP LOSS')
-      continue
-    }
-    // 3) Target 2 (pump parabolik)
-    if (pnlPct >= 55) {
-      closePosition(pos, pair, pnlPct, 'TARGET 2 — pump parabolik')
-      continue
-    }
-    // 4) Trailing stop setelah TP1
-    if (pos.partialTaken && pnlPct <= pos.peakPnlPct - 8) {
-      closePosition(pos, pair, pnlPct, 'TRAILING STOP')
-      continue
-    }
-    // 5) Sinyal melemah (dump)
-    if (pair && pair.phase === 'dump' && S.tick - pos.openedTick > 2) {
-      closePosition(pos, pair, pnlPct, pnlPct > 4 ? 'SINYAL MELEMAH — profit diamankan' : 'SINYAL DUMP — cut loss dini')
-      continue
-    }
-    // 6) TP1 — jual 50%, stop ke breakeven
-    if (!pos.partialTaken && pnlPct >= pos.tp1Pct) {
-      const half = pos.sizeUsd * 0.5
-      const proceeds = half * (1 + pnlPct / 100)
-      S.cash += proceeds
-      pos.realizedPnlUsd += proceeds - half
-      pos.sizeUsd *= 0.5
-      pos.partialTaken = true
-      pos.stopPct = 0 // stop ke breakeven
-      markInteresting(pair!)
-      log('executor', 'success', `TP1 ${pos.symbol} — jual 50% di +${pnlPct.toFixed(1)}% (+$${(proceeds - half).toFixed(2)}) · stop dinaikkan ke breakeven`)
-      setAgent('executor', 'Mengelola', `TP1 ${pos.symbol} +${pnlPct.toFixed(0)}%`)
-      continue
-    }
-    // 7) Breakeven stop (setelah TP1)
-    if (pos.partialTaken && pnlPct <= 0.2) {
-      closePosition(pos, pair, pnlPct, 'BREAKEVEN STOP')
-      continue
-    }
-    // 8) Time stop
-    if (S.tick - pos.openedTick > 42 && pnlPct < 3) {
-      closePosition(pos, pair, pnlPct, 'TIME STOP — momentum habis')
-      continue
-    }
-    setAgent('executor', 'Mengelola', `${pos.symbol} ${pnlPct >= 0 ? '+' : ''}${pnlPct.toFixed(1)}%`)
-  }
-  if (!S.positions.length && chance(0.18)) {
-    log('executor', 'info', `Menunggu setup valid — ${S.pairs.filter((p) => p.status === 'watch').length} pair diamati · slot ${S.positions.length}/${MAX_OPEN}`)
-  }
-}
-
-// ---------- journal ----------
-function journalClose(trade: TradeView) {
-  const st = S.stats
-  st.trades++
-  st.sumPnlPct += trade.pnlPct
-  st.sumSlip += trade.slippagePct
-  if (trade.win) {
-    st.wins++
-    st.grossWin += trade.pnlUsd
-    st.sumWinPct += trade.pnlPct
-    st.streak = st.streak >= 0 ? st.streak + 1 : 1
+function updateStats(t: TradeView) {
+  stats.trades++
+  stats.feesUsd += t.feeUsd
+  if (t.win) {
+    stats.wins++
+    stats.streak = stats.streak >= 0 ? stats.streak + 1 : 1
   } else {
-    st.losses++
-    st.grossLoss += Math.abs(trade.pnlUsd)
-    st.sumLossPct += trade.pnlPct
-    st.streak = st.streak <= 0 ? st.streak - 1 : -1
+    stats.losses++
+    stats.streak = stats.streak <= 0 ? stats.streak - 1 : -1
   }
-  st.bestStreak = Math.max(st.bestStreak, st.streak)
-  st.best = Math.max(st.best, trade.pnlPct)
-  st.worst = Math.min(st.worst, trade.pnlPct)
+  stats.bestStreak = Math.max(stats.bestStreak, stats.streak)
+  stats.winRate = (stats.wins / stats.trades) * 100
+  stats.bestTradePct = Math.max(stats.bestTradePct, t.pnlPct)
+  stats.worstTradePct = Math.min(stats.worstTradePct, t.pnlPct)
+  const gw = trades.filter((x) => x.win).reduce((a, x) => a + x.pnlUsd, 0)
+  const gl = Math.abs(trades.filter((x) => !x.win).reduce((a, x) => a + x.pnlUsd, 0))
+  stats.profitFactor = gl > 0 ? gw / gl : gw > 0 ? 99 : 0
+  const allPct = trades.map((x) => x.pnlPct)
+  stats.expectancyPct = allPct.length ? allPct.reduce((a, b) => a + b, 0) / allPct.length : 0
+  const wPct = trades.filter((x) => x.win).map((x) => x.pnlPct)
+  const lPct = trades.filter((x) => !x.win).map((x) => x.pnlPct)
+  stats.avgWinPct = wPct.length ? wPct.reduce((a, b) => a + b, 0) / wPct.length : 0
+  stats.avgLossPct = lPct.length ? lPct.reduce((a, b) => a + b, 0) / lPct.length : 0
+}
 
-  setAgent('journal', 'Mencatat', `Trade #${st.trades} ${trade.win ? 'WIN' : 'LOSS'} ${trade.symbol}`)
-  log('journal', trade.win ? 'success' : 'warn', `JOURNAL #${st.trades} ${trade.symbol} — ${trade.win ? 'WIN' : 'LOSS'} ${trade.pnlPct >= 0 ? '+' : ''}${trade.pnlPct.toFixed(1)}% · alasan exit: ${trade.reason} · hold ${trade.holdTicks} tick`)
+// ---------- market event handlers ----------
+async function onCandleClose(symbol: string, _candle: Candle) {
+  if (S_status !== 'RUNNING') return
+  const ctx = ctxFor(symbol)
+  if (!ctx) return
 
-  if (st.trades % 20 === 0) {
-    const wr = (st.wins / st.trades) * 100
-    const pf = st.grossLoss > 0 ? st.grossWin / st.grossLoss : 99
-    log('journal', 'info', `SESSION REVIEW — ${st.trades} trade · win rate ${wr.toFixed(1)}% · profit factor ${pf.toFixed(2)} · ekspektasi ${(st.sumPnlPct / st.trades).toFixed(2)}%/trade`)
+  // 1) strategy-managed exits (di candle close, disiplin master)
+  for (const pos of [...positions]) {
+    if (pos.symbol !== symbol) continue
+    const m = MASTER_BY_ID.get(pos.strategy)
+    if (!m) continue
+    const sp: StrategyPosition = {
+      entryPrice: pos.entryPrice,
+      peakPrice: pos.peakPrice,
+      openedAt: pos.openedAt,
+      meta: {},
+    }
+    const ex = m.manageExit(sp, ctx)
+    if (ex) {
+      await closePosition(pos, ctx.livePrice, ex.reason)
+      continue
+    }
   }
 
-  const mult = S.equity / START_EQUITY
-  if (mult >= st.lastMilestone * 2) {
-    st.lastMilestone *= 2
-    log('journal', 'success', `MILESTONE — ekuitas ${st.lastMilestone}x modal awal ($${S.equity.toFixed(2)}) · sistem tetap 24/7`)
+  // 2) master entries
+  for (const m of MASTERS) {
+    const key = `${symbol}|${m.id}`
+    const lastExit = lastExitAt.get(key)
+    if (lastExit && Date.now() - lastExit < 10 * 60 * 1000) continue
+    const hasOpen = positions.some((p) => p.symbol === symbol && p.strategy === m.id)
+    if (hasOpen) continue
+    const sig = m.entry(ctx)
+    if (sig) {
+      setMaster(m.id, 'Sinyal', `${symbol} ${m.name} — entry!`)
+      decisionMap.set(symbol, { decision: 'SIGNAL', reason: `${m.trader}: ${sig.reason.split('—')[0]}`, ts: Date.now() })
+      log(m.id, 'info', `SINYAL ${symbol} — ${sig.reason}`)
+      await openPosition(sig, symbol)
+      break // satu entry per candle per simbol
+    }
   }
 }
 
-// ---------- market & account ----------
-function marketTick() {
-  for (const p of S.pairs) {
-    tickPair(p, S.tick)
-    if ((p.phase === 'spike' || p.phase === 'pump' || p.phase === 'rug' || p.decision === 'REJECT') && Math.abs(p.changePct) > 2) markInteresting(p)
+function onPrice(symbol: string, price: number) {
+  // tick-level: stop / tp / trailing — selalu aktif (juga saat pause)
+  for (const pos of [...positions]) {
+    if (pos.symbol !== symbol) continue
+    pos.peakPrice = Math.max(pos.peakPrice, price)
+    if (price <= pos.stopPrice) {
+      void closePosition(pos, price, `STOP LOSS @ $${price.toPrecision(8)} — disiplin risiko`)
+      continue
+    }
+    if (price >= pos.tpPrice) {
+      void closePosition(pos, price, `TAKE PROFIT @ $${price.toPrecision(8)} — target tercapai`)
+      continue
+    }
+    const m = MASTER_BY_ID.get(pos.strategy)
+    const ctx: MarketCtx = {
+      symbol,
+      candles: market.getClosed(symbol),
+      livePrice: price,
+      atr14: atrMap.get(symbol) ?? 0,
+      equity,
+    }
+    if (m?.manageTick && ctx.atr14 > 0) {
+      const sp: StrategyPosition = { entryPrice: pos.entryPrice, peakPrice: pos.peakPrice, openedAt: pos.openedAt, meta: {} }
+      const ex = m.manageTick(sp, ctx)
+      if (ex) void closePosition(pos, price, ex.reason)
+    }
   }
+}
+
+// ---------- account ----------
+function computeEquity(): number {
+  const exposure = positions.reduce((a, p) => a + p.qty * (market.price(p.symbol) || p.entryPrice), 0)
+  if (mode() === 'LIVE' && live.configured && liveBalanceUsd !== null) return liveBalanceUsd + exposure
+  return cash + exposure
 }
 
 function accountTick() {
-  let exposure = 0
-  for (const pos of S.positions) {
-    const pair = S.pairs.find((p) => p.id === pos.pairId)
-    const mark = pair ? pair.price : pos.entryPrice
-    const pnlPct = (mark / pos.entryPrice - 1) * 100
-    exposure += pos.sizeUsd * (1 + pnlPct / 100)
-  }
-  S.equity = S.cash + exposure
-  S.peakEquity = Math.max(S.peakEquity, S.equity)
-  const dd = S.peakEquity > 0 ? ((S.peakEquity - S.equity) / S.peakEquity) * 100 : 0
-  S.maxDD = Math.max(S.maxDD, dd)
-  // decay heat agent
-  for (const id of Object.keys(S.agents) as AgentId[]) S.agents[id].heat *= 0.9
+  risk.refreshDaily()
+  equity = computeEquity()
+  peakEquity = Math.max(peakEquity, equity)
+  const dd = peakEquity > 0 ? ((peakEquity - equity) / peakEquity) * 100 : 0
+  maxDD = Math.max(maxDD, dd)
+  for (const m of masterStats.values()) m.heat *= 0.94
 }
 
-// ---------- serialize (JANGAN bocorkan field hidden) ----------
-function buildWatchlist(): WatchPair[] {
-  const sorted = [...S.pairs]
-    .filter((p) => p.phase !== 'dead')
-    .sort((a, b) => {
-      const rank = (p: Pair) => (p.status === 'held' ? 3 : 0) + (p.decision === 'REJECT' || p.decision === 'ANALYZING' ? 2 : 0) + (Math.abs(p.changePct) > 3 ? 1 : 0)
-      return rank(b) - rank(a) || b.lastInterestingTick - a.lastInterestingTick || b.z - a.z
-    })
-    .slice(0, 9)
-  return sorted.map((p) => ({
-    id: p.id,
-    symbol: p.symbol,
-    chain: p.chain,
-    price: p.price,
-    changePct: p.changePct,
-    spikePct: p.spikePct,
-    z: p.z,
-    liquidity: p.liquidity,
-    vol24h: p.vol24h,
-    age: p.age,
-    rugScore: p.rugScore,
-    rugChecks: {
-      lpLocked: p.lpLocked,
-      honeypot: p.honeypot,
-      renounced: p.renounced,
-      mintDisabled: p.mintDisabled,
-      top10Pct: p.top10,
-      holders: p.holders,
-    },
-    decision: p.decision,
-    reason: p.reason,
-    phase: p.phase,
-  }))
+// ---------- serialize ----------
+function masterViews(): MasterView[] {
+  const views: MasterView[] = MASTERS.map((m) => {
+    const st = masterStats.get(m.id) ?? { decisions: 0, status: 'Siap', lastAction: 'Inisialisasi', lastActionTs: 0, heat: 0 }
+    const myTrades = trades.filter((t) => t.strategy === m.id)
+    const wins = myTrades.filter((t) => t.win).length
+    return {
+      id: m.id,
+      name: m.name,
+      trader: m.trader,
+      icon: m.icon,
+      role: m.role,
+      status: st.status,
+      lastAction: st.lastAction,
+      lastActionTs: st.lastActionTs,
+      decisions: st.decisions,
+      heat: st.heat,
+      trades: myTrades.length,
+      wins,
+      winRate: myTrades.length ? (wins / myTrades.length) * 100 : 0,
+      pnlUsd: myTrades.reduce((a, t) => a + t.pnlUsd, 0),
+      openPositions: positions.filter((p) => p.strategy === m.id).length,
+    }
+  })
+  const r = masterStats.get('risk')!
+  views.push({
+    id: 'risk',
+    name: 'Risk Manager',
+    trader: 'Kaidah PTJ',
+    icon: 'shield',
+    role: `Risiko ≤ ${settings.riskPerTradePct}%/trade · maks ${settings.maxOpenPositions} posisi · loss harian ≤ ${settings.dailyLossLimitPct}%`,
+    status: entriesBlocked ? 'Menahan' : 'Mengawasi',
+    lastAction: r?.lastAction ?? 'Inisialisasi',
+    lastActionTs: r?.lastActionTs ?? 0,
+    decisions: r?.decisions ?? 0,
+    heat: r?.heat ?? 0,
+    trades: 0,
+    wins: 0,
+    winRate: 0,
+    pnlUsd: 0,
+    openPositions: 0,
+  })
+  return views
+}
+
+function symbolViews(): MarketSymbol[] {
+  return ALL_SYMBOLS.map((s) => {
+    const t = market.tickers.get(s)
+    const price = market.price(s)
+    const cs = market.getClosed(s)
+    let emaTrend: 'UP' | 'DOWN' | 'FLAT' = 'FLAT'
+    let rsiVal = 50
+    if (cs.length > 60) {
+      const closes = cs.map((c) => c.c)
+      const e21 = ema(closes, 21)
+      const e55 = ema(closes, 55)
+      const i = closes.length - 1
+      if (Number.isFinite(e21[i]) && Number.isFinite(e55[i])) {
+        emaTrend = e21[i] > e55[i] * 1.0005 ? 'UP' : e21[i] < e55[i] * 0.9995 ? 'DOWN' : 'FLAT'
+      }
+      rsiVal = computeRsi(closes)
+    }
+    const atrVal = atrMap.get(s) ?? computeAtrFallback(s)
+    if (!atrMap.has(s) && atrVal > 0) atrMap.set(s, atrVal)
+    const dec = decisionMap.get(s)
+    const age = dec ? Date.now() - dec.ts : Infinity
+    let decision: PairDecision = 'WAIT'
+    let reason = 'Menunggu setup'
+    if (positions.some((p) => p.symbol === s)) {
+      const mine = positions.filter((p) => p.symbol === s)
+      decision = 'HOLD'
+      reason = `${mine.length} posisi terbuka (${mine.map((p) => MASTER_BY_ID.get(p.strategy)?.trader).join(', ')})`
+    } else if (dec && age < 3 * 60 * 1000) {
+      decision = dec.decision
+      reason = dec.reason
+    } else if (emaTrend === 'UP') {
+      decision = 'WATCH'
+      reason = 'Tren naik — menunggu sinyal master'
+    } else if (emaTrend === 'DOWN') {
+      decision = 'WATCH'
+      reason = 'Tren turun — menunggu peluang reversion'
+    }
+    const atrPct = price > 0 && atrVal > 0 ? (atrVal / price) * 100 : 0
+    return {
+      id: s,
+      base: BASE_MAP[s],
+      price,
+      change24hPct: t?.change24hPct ?? 0,
+      high24h: t?.high24h ?? 0,
+      low24h: t?.low24h ?? 0,
+      vol24hUsd: t?.vol24hUsd ?? 0,
+      emaTrend,
+      rsi14: rsiVal,
+      atrPct,
+      decision,
+      reason,
+      sparkline: [...(market.sparkline.get(s) ?? [])],
+      mastersActive: positions.filter((p) => p.symbol === s).map((p) => p.strategy),
+    }
+  })
+}
+
+function computeRsi(closes: number[]): number {
+  const r = rsiCalc(closes, 14)
+  const v = r[r.length - 1]
+  return Number.isFinite(v) ? v : 50
+}
+
+function computeAtrFallback(symbol: string): number {
+  const cs = market.getClosed(symbol)
+  if (cs.length < 20) return 0
+  const a = atr(cs, 14)
+  const v = a[a.length - 1]
+  return Number.isFinite(v) ? v : 0
 }
 
 function serialize(): EngineState {
-  const st = S.stats
-  const winRate = st.trades > 0 ? (st.wins / st.trades) * 100 : 0
-  const pf = st.grossLoss > 0 ? Math.min(st.grossWin / st.grossLoss, 99) : st.grossWin > 0 ? 99 : 0
-  const exposure = S.positions.reduce((acc, pos) => {
-    const pair = S.pairs.find((p) => p.id === pos.pairId)
-    const mark = pair ? pair.price : pos.entryPrice
-    return acc + pos.sizeUsd * (1 + ((mark / pos.entryPrice - 1) * 100) / 100)
-  }, 0)
-  const positions: PositionView[] = S.positions.map((pos) => {
-    const pair = S.pairs.find((p) => p.id === pos.pairId)
-    const mark = pair ? pair.price : pos.entryPrice
-    const pnlPct = (mark / pos.entryPrice - 1) * 100
+  const exposure = positions.reduce((a, p) => a + p.qty * (market.price(p.symbol) || p.entryPrice), 0)
+  const positionsView: PositionView[] = positions.map((p) => {
+    const mark = market.price(p.symbol) || p.entryPrice
+    const pnlPct = ((mark - p.entryPrice) / p.entryPrice) * 100
     return {
-      id: pos.id,
-      symbol: pos.symbol,
-      chain: pos.chain,
-      sizeUsd: pos.sizeUsd,
-      entryPrice: pos.entryPrice,
+      id: p.id,
+      symbol: p.symbol,
+      base: BASE_MAP[p.symbol],
+      strategy: p.strategy,
+      strategyName: STRAT_NAME[p.strategy] ?? p.strategy,
+      sizeUsd: p.sizeUsd,
+      qty: p.qty,
+      entryPrice: p.entryPrice,
       markPrice: mark,
-      slippagePct: pos.slippagePct,
+      stopPrice: p.stopPrice,
+      takeProfitPrice: p.tpPrice,
       pnlPct,
-      pnlUsd: pos.sizeUsd * (pnlPct / 100),
-      stopPct: pos.stopPct,
-      tp1Pct: pos.tp1Pct,
-      peakPnlPct: pos.peakPnlPct,
-      partialTaken: pos.partialTaken,
-      age: S.tick - pos.openedTick,
-      thesis: pos.thesis,
+      pnlUsd: p.qty * (mark - p.entryPrice) - p.feeEntryUsd - p.qty * mark * TAKER_FEE,
+      peakPnlPct: ((p.peakPrice - p.entryPrice) / p.entryPrice) * 100,
+      mode: p.mode,
+      openedAt: p.openedAt,
+      ageMin: Math.max(0, Math.round((Date.now() - p.openedAt) / 60000)),
+      thesis: p.thesis,
     }
   })
+
+  const cs = market.getClosed(focusSymbol)
+  const viewCandles = cs.slice(-121).map((c) => ({ t: c.t, o: c.o, h: c.h, l: c.l, c: c.c, v: c.v }))
+  const closesAll = cs.map((c) => c.c)
+  const e8 = ema(closesAll, 8).slice(-121).map((v) => (Number.isFinite(v) ? v : NaN))
+  const e21 = ema(closesAll, 21).slice(-121).map((v) => (Number.isFinite(v) ? v : NaN))
+
+  const settingsView: SettingsView = {
+    mode: settings.mode,
+    apiKeyMasked: settings.apiKey ? `${settings.apiKey.slice(0, 6)}…${settings.apiKey.slice(-4)}` : '',
+    hasApiSecret: settings.apiSecret.length > 0,
+    testnet: settings.testnet,
+    riskPerTradePct: settings.riskPerTradePct,
+    maxOpenPositions: settings.maxOpenPositions,
+    dailyLossLimitPct: settings.dailyLossLimitPct,
+    startingEquity: settings.startingEquity,
+    allowedSymbols: ALL_SYMBOLS,
+  }
+
   return {
-    status: S.status,
-    speed: S.speed,
-    tick: S.tick,
-    startedAt: S.startedAt,
-    engineVersion: 'NEXUS-6 v1.4.2',
+    status: S_status,
+    tick,
+    startedAt,
+    engineVersion: ENGINE_VERSION,
+    marketName: 'BINANCE SPOT',
+    marketWs: market.wsStatus,
+    lastMarketTick: market.lastMsgTs,
+    focusSymbol,
+    candles: viewCandles,
+    ema8Series: e8,
+    ema21Series: e21,
     account: {
-      equity: S.equity,
-      cash: S.cash,
-      startingEquity: START_EQUITY,
-      pnl: S.equity - START_EQUITY,
-      pnlPct: ((S.equity - START_EQUITY) / START_EQUITY) * 100,
-      peakEquity: S.peakEquity,
-      maxDrawdownPct: S.maxDD,
+      equity,
+      cash,
+      startingEquity: settings.startingEquity,
+      pnl: equity - settings.startingEquity,
+      pnlPct: settings.startingEquity > 0 ? ((equity - settings.startingEquity) / settings.startingEquity) * 100 : 0,
+      peakEquity,
+      maxDrawdownPct: maxDD,
       exposureUsd: exposure,
+      mode: settings.mode,
+      liveConnected: liveConnected && live.configured,
+      liveBalanceUsd,
     },
-    stats: {
-      trades: st.trades,
-      wins: st.wins,
-      losses: st.losses,
-      winRate,
-      profitFactor: pf,
-      expectancyPct: st.trades > 0 ? st.sumPnlPct / st.trades : 0,
-      avgWinPct: st.wins > 0 ? st.sumWinPct / st.wins : 0,
-      avgLossPct: st.losses > 0 ? st.sumLossPct / st.losses : 0,
-      avgSlippagePct: st.trades > 0 ? st.sumSlip / st.trades : 0,
-      bestTradePct: st.best,
-      worstTradePct: st.worst,
-      streak: st.streak,
-      bestStreak: st.bestStreak,
-      rejectedRugs: st.rejectedRugs,
+    stats,
+    risk: {
+      dailyPnlUsd: risk.dailyPnlUsd(),
+      dailyPnlPct: risk.dailyPnlPct(),
+      dailyLossLimitPct: settings.dailyLossLimitPct,
+      entriesBlocked,
+      blockReason,
+      maxOpenPositions: settings.maxOpenPositions,
+      riskPerTradePct: settings.riskPerTradePct,
+      openPositions: positions.length,
+      openExposurePct: equity > 0 ? (exposure / equity) * 100 : 0,
     },
-    equityCurve: equityCurveView(),
-    agents: AGENT_META.map((m) => ({
-      id: m.id,
-      name: m.name,
-      icon: m.icon,
-      role: m.role,
-      status: S.agents[m.id].status,
-      lastAction: S.agents[m.id].lastAction,
-      lastActionTick: S.agents[m.id].lastActionTick,
-      decisions: S.agents[m.id].decisions,
-      heat: S.agents[m.id].heat,
-    })),
-    activity: S.activity.slice(-60).reverse(),
-    watchlist: buildWatchlist(),
-    positions,
-    trades: [...S.trades].reverse().slice(0, 40),
+    equityCurve: equityCurve.slice(-600),
+    masters: masterViews(),
+    activity: activity.slice(-70).reverse(),
+    symbols: symbolViews(),
+    positions: positionsView,
+    trades: trades.slice(0, 50),
+    settings: settingsView,
   }
 }
 
-let curve: { t: number; e: number }[] = []
-function equityCurveView(): { t: number; e: number }[] {
-  curve.push({ t: S.tick, e: S.equity })
-  if (curve.length > 700) curve = curve.filter((_, i) => i % 2 === 0)
-  return curve
-}
+// ---------- boot ----------
+async function boot() {
+  console.log('[apex5] booting — memuat konfigurasi & data pasar real…')
 
-// ---------- loop ----------
-function tickEngine() {
-  S.tick++
-  marketTick()
-  scannerStep()
-  volumeStep()
-  rugStep()
-  sizerStep()
-  executorStep()
-  accountTick()
-  journalIdle()
-  io.emit('state', serialize())
-}
+  const saved = await store.loadSettings()
+  if (saved.mode === 'LIVE' || saved.mode === 'PAPER') settings.mode = saved.mode
+  if (saved.apiKey) settings.apiKey = saved.apiKey
+  if (saved.apiSecret) settings.apiSecret = saved.apiSecret
+  if (saved.testnet !== undefined) settings.testnet = saved.testnet === 'true'
+  if (saved.riskPerTradePct) settings.riskPerTradePct = Number(saved.riskPerTradePct) || 2
+  if (saved.maxOpenPositions) settings.maxOpenPositions = Number(saved.maxOpenPositions) || 5
+  if (saved.dailyLossLimitPct) settings.dailyLossLimitPct = Number(saved.dailyLossLimitPct) || 6
+  if (saved.startingEquity) settings.startingEquity = Number(saved.startingEquity) || 1000
 
-function journalIdle() {
-  if (S.tick % 30 === 15 && S.stats.trades > 0) {
-    const st = S.stats
-    const wr = (st.wins / st.trades) * 100
-    setAgent('journal', 'Mencatat', `${st.trades} trade · WR ${wr.toFixed(0)}%`)
-    log('journal', 'info', `Keputusan tervalidasi — ${st.trades} trade ditutup, ${S.positions.length} aktif, ${st.rejectedRugs} rug dicegah`)
+  for (const m of MASTERS.map((x) => x.id)) {
+    masterStats.set(m, { decisions: 0, status: 'Siap', lastAction: 'Menunggu data pasar', lastActionTs: 0, heat: 0 })
   }
-}
+  masterStats.set('risk', { decisions: 0, status: 'Mengawasi', lastAction: 'Inisialisasi risk guard', lastActionTs: 0, heat: 0 })
 
-let timer: ReturnType<typeof setTimeout> | null = null
-function schedule() {
-  if (timer) clearTimeout(timer)
-  timer = setTimeout(() => {
-    try {
-      if (S.status === 'RUNNING') tickEngine()
-    } catch (e) {
-      console.error('[engine] tick error', e)
+  // pulihkan trade & equity dari DB
+  const stored = await store.loadTrades()
+  const now = Date.now()
+  for (const t of stored) {
+    if (t.status === 'OPEN') {
+      positions.push({
+        id: t.id,
+        symbol: t.symbol,
+        strategy: t.strategy as MasterId,
+        qty: t.qty,
+        sizeUsd: t.sizeUsd,
+        entryPrice: t.entryPrice,
+        stopPrice: safeMeta(t.meta, 'stopPrice', t.entryPrice * 0.98),
+        tpPrice: safeMeta(t.meta, 'tpPrice', t.entryPrice * 1.04),
+        peakPrice: Math.max(safeMeta(t.meta, 'peakPrice', t.entryPrice), t.entryPrice),
+        feeEntryUsd: t.feeUsd,
+        mode: t.mode as TradeMode,
+        openedAt: t.entryTime,
+        thesis: safeMetaStr(t.meta, 'thesis', 'Dipulihkan setelah restart'),
+      })
+    } else {
+      trades.push({
+        id: t.id,
+        symbol: t.symbol,
+        strategy: t.strategy as MasterId,
+        strategyName: STRAT_NAME[t.strategy] ?? t.strategy,
+        sizeUsd: t.sizeUsd,
+        entryPrice: t.entryPrice,
+        exitPrice: t.exitPrice ?? t.entryPrice,
+        pnlUsd: t.pnlUsd ?? 0,
+        pnlPct: t.pnlPct ?? 0,
+        feeUsd: t.feeUsd,
+        reason: t.reason,
+        win: (t.pnlUsd ?? 0) > 0,
+        mode: t.mode as TradeMode,
+        entryTime: t.entryTime,
+        exitTime: t.exitTime ?? t.entryTime,
+        holdMin: Math.max(0, Math.round(((t.exitTime ?? t.entryTime) - t.entryTime) / 60000)),
+      })
     }
-    schedule()
-  }, TICK_MS / S.speed)
+  }
+  trades.sort((a, b) => b.exitTime - a.exitTime)
+  // rebuild stats dari closed trades
+  stats = freshStats()
+  for (const t of [...trades].reverse()) updateStats(t)
+  if (stored.length) {
+    log('risk', 'info', `Dipulihkan dari database: ${positions.length} posisi terbuka, ${trades.length} trade tertutup`)
+  }
+
+  const eqPts = await store.loadEquity(600)
+  if (eqPts.length) {
+    equityCurve = eqPts.map((p) => ({ t: p.t, e: p.equity }))
+    const lastPt = eqPts[eqPts.length - 1]
+    if (mode() === 'PAPER') {
+      cash = lastPt.cash
+      equity = lastPt.equity
+      peakEquity = Math.max(...equityCurve.map((p) => p.e), settings.startingEquity)
+      log('risk', 'info', `Ekuitas dipulihkan: $${equity.toFixed(2)} (kas $${cash.toFixed(2)})`)
+    }
+  }
+  dayStartEquity = equity
+
+  // sambungkan pasar real
+  market.onCandleClose(onCandleClose)
+  market.onPrice(onPrice)
+  await market.init()
+
+  // pra-hitung ATR semua simbol dari data historis (agar tampilan & sizing siap sejak detik pertama)
+  for (const s of ALL_SYMBOLS) {
+    const ctx = ctxFor(s)
+    if (ctx) setMaster('risk', 'Siap', `Data historis ${s} siap`)
+  }
+
+  if (settings.apiKey && settings.apiSecret) {
+    live.configure(settings.apiKey, settings.apiSecret, settings.testnet)
+    await live.loadFilters(ALL_SYMBOLS)
+    const bal = await live.usdtBalance()
+    if (bal !== null) {
+      liveConnected = true
+      liveBalanceUsd = bal
+      log('risk', 'success', `Koneksi LIVE Binance ${settings.testnet ? 'TESTNET' : 'MAINNET'} OK — saldo USDT $${bal.toFixed(2)}`)
+    } else {
+      log('risk', 'danger', 'API keys ada tapi autentikasi gagal — cek kembali keys di Pengaturan')
+    }
+  }
+
+  cash = mode() === 'PAPER' && cash === 0 ? settings.startingEquity : cash
+  log('risk', 'info', `APEX-5 aktif di pasar SUNGGUHAN Binance Spot · mode ${mode()} · 10 pair USDT · 5 master strategi + Risk Manager`)
+
+  // sinkronisasi saldo live berkala
+  setInterval(async () => {
+    if (mode() === 'LIVE' && live.configured) {
+      const bal = await live.usdtBalance()
+      if (bal !== null) {
+        liveConnected = true
+        liveBalanceUsd = bal
+      }
+    }
+  }, 60_000)
+
+  setInterval(() => {
+    equityCurve.push({ t: Date.now(), e: equity })
+    if (equityCurve.length > 700) equityCurve = equityCurve.slice(-500)
+    void store.addEquityPoint(Date.now(), equity, cash)
+    void store.pruneEquity()
+  }, 60_000)
+
+  // laporan pemindaian berkala — tiap master menyampaikan kondisi pasar real
+  let scanIdx = 0
+  setInterval(() => {
+    if (S_status !== 'RUNNING') return
+    const symbols = ALL_SYMBOLS
+    let aboveEma55 = 0
+    let aboveEma200 = 0
+    let nearOversold = 0
+    let rsiSum = 0
+    let rsiN = 0
+    for (const s of symbols) {
+      const cs = market.getClosed(s)
+      if (cs.length < 220) continue
+      const closes = cs.map((c) => c.c)
+      const i = closes.length - 1
+      const e55 = ema(closes, 55)[i]
+      const e200 = ema(closes, 200)[i]
+      if (Number.isFinite(e55) && closes[i] > e55) aboveEma55++
+      if (Number.isFinite(e200) && closes[i] > e200) aboveEma200++
+      const r = rsiCalc(closes, 14)[i]
+      if (Number.isFinite(r)) {
+        rsiSum += r
+        rsiN++
+        if (r < 34) nearOversold++
+      }
+    }
+    const msgs: { id: MasterId; msg: string }[] = [
+      { id: 'turtle', msg: `SCAN 10 pair — ${aboveEma55} di atas EMA55 · breakout Donchian-20 dipantau tiap candle 1m` },
+      { id: 'seykota', msg: `SCAN tren — ${aboveEma55} pair kemungkinan uptrend · cross EMA8/21 dipantau` },
+      { id: 'schwartz', msg: `SCAN momentum — RSI rata-rata ${rsiN ? (rsiSum / rsiN).toFixed(0) : '—'} · konfirmasi volume 1.3x siap` },
+      { id: 'ptj', msg: `SCAN makro — ${aboveEma200}/10 pair di atas EMA200 · setup krusial dicatat` },
+      { id: 'bollinger', msg: `SCAN reversion — ${nearOversold} pair mendekati band bawah · RSI oversold dipantau` },
+    ]
+    const m = msgs[scanIdx % msgs.length]
+    scanIdx++
+    log(m.id, 'info', m.msg)
+    setMaster(m.id, 'Memindai', m.msg.split('—')[1]?.trim() ?? 'Memindai')
+  }, 150_000)
+
+}
+
+function safeMeta(meta: string | null, key: string, fallback: number): number {
+  try {
+    if (!meta) return fallback
+    const v = JSON.parse(meta)[key]
+    return typeof v === 'number' ? v : fallback
+  } catch {
+    return fallback
+  }
+}
+
+function safeMetaStr(meta: string | null, key: string, fallback: string): string {
+  try {
+    if (!meta) return fallback
+    const v = JSON.parse(meta)[key]
+    return typeof v === 'string' ? v : fallback
+  } catch {
+    return fallback
+  }
+}
+
+// ---------- main loop ----------
+let heartbeatAt = 0
+function mainTick() {
+  tick++
+  accountTick()
+  const now = Date.now()
+  if (now - heartbeatAt > 60_000) {
+    heartbeatAt = now
+    const wsAge = market.lastMsgTs ? Math.round((now - market.lastMsgTs) / 1000) : -1
+    log('risk', 'info', `HEARTBEAT · pasar ${market.wsStatus} (data ${wsAge >= 0 ? `${wsAge}s lalu` : 'belum ada'}) · ekuitas $${equity.toFixed(2)} · PnL harian ${risk.dailyPnlPct() >= 0 ? '+' : ''}${risk.dailyPnlPct().toFixed(2)}% · posisi ${positions.length}/${settings.maxOpenPositions}`)
+  }
+  io.emit('state', serialize())
 }
 
 // ---------- socket server ----------
@@ -659,13 +891,6 @@ const io = new Server(httpServer, {
   pingInterval: 25000,
 })
 
-initState()
-// warmup curve agar chart tidak kosong saat pertama dibuka
-for (let i = 0; i < 3; i++) {
-  marketTick()
-  equityCurveView()
-}
-
 io.on('connection', (socket) => {
   socket.emit('state', serialize())
   socket.on('hello', () => socket.emit('state', serialize()))
@@ -673,33 +898,168 @@ io.on('connection', (socket) => {
     if (!cmd || typeof cmd.action !== 'string') return
     switch (cmd.action) {
       case 'start':
-        S.status = 'RUNNING'
-        log('journal', 'info', 'RESUME — bot kembali berjalan 24/7')
+        if (S_status === 'PAUSED') {
+          S_status = 'RUNNING'
+          log('risk', 'info', 'RESUME — bot kembali mengawasi & mengeksekusi pasar real')
+        }
         break
       case 'pause':
-        S.status = 'PAUSED'
-        log('journal', 'warn', 'PAUSE — semua agent ditahan, posisi tetap dipantau')
+        S_status = 'PAUSED'
+        log('risk', 'warn', 'PAUSE — sinyal baru ditahan; posisi tetap dipantau & stop tetap aktif')
         break
       case 'reset':
-        initState()
-        curve = []
+        void doReset()
         break
-      case 'speed':
-        if (cmd.value === 1 || cmd.value === 2 || cmd.value === 4) {
-          S.speed = cmd.value
-          log('journal', 'info', `Kecepatan simulasi diubah ke ${cmd.value}x`)
-        }
+      case 'focus':
+        if (typeof cmd.symbol === 'string' && ALL_SYMBOLS.includes(cmd.symbol)) focusSymbol = cmd.symbol
+        break
+      case 'settings':
+        void applySettings(cmd.settings as Record<string, unknown>)
+        break
+      case 'testTrade':
+        void testTrade()
+        break
+      case 'testClose':
+        void testClose()
         break
     }
     io.emit('state', serialize())
   })
-  socket.on('error', (e) => console.error('[engine] socket error', e))
+  socket.on('error', (e) => console.error('[apex5] socket error', e))
 })
 
-httpServer.listen(PORT, () => {
-  console.log(`[NEXUS-6] trading engine listening on :${PORT}`)
-  schedule()
-})
+async function doReset() {
+  if (positions.some((p) => p.mode === 'LIVE')) {
+    log('risk', 'danger', 'RESET ditolak — ada posisi LIVE terbuka. Tutup posisi manual di bursa terlebih dahulu.')
+    return
+  }
+  await store.wipeAll()
+  positions = []
+  trades = []
+  stats = freshStats()
+  equityCurve = []
+  cash = settings.startingEquity
+  equity = settings.startingEquity
+  peakEquity = settings.startingEquity
+  maxDD = 0
+  dayStartEquity = equity
+  entriesBlocked = false
+  blockReason = ''
+  decisionMap.clear()
+  lastExitAt.clear()
+  liveBalanceUsd = null
+  for (const m of masterStats.values()) {
+    m.decisions = 0
+    m.heat = 0
+  }
+  log('risk', 'info', `RESET — semua data sesi dihapus. Modal diatur ke $${settings.startingEquity.toFixed(2)}. Pasar real tetap tersambung.`)
+}
 
-process.on('SIGTERM', () => { httpServer.close(() => process.exit(0)) })
-process.on('SIGINT', () => { httpServer.close(() => process.exit(0)) })
+async function applySettings(patch: Record<string, unknown>) {
+  let liveReconfigure = false
+  const num = (v: unknown, min: number, max: number, dflt: number) => {
+    const n = Number(v)
+    return Number.isFinite(n) ? Math.min(max, Math.max(min, n)) : dflt
+  }
+
+  if (typeof patch.mode === 'string' && (patch.mode === 'PAPER' || patch.mode === 'LIVE')) {
+    if (patch.mode === 'LIVE' && !(patch.apiKey ?? settings.apiKey) && !settings.apiKey) {
+      log('risk', 'danger', 'Mode LIVE butuh API keys — atur di Pengaturan terlebih dahulu. Tetap di PAPER.')
+    } else {
+      settings.mode = patch.mode
+      log('risk', patch.mode === 'LIVE' ? 'warn' : 'info', `MODE EKSEKUSI → ${patch.mode}${patch.mode === 'LIVE' ? ' · order nyata akan dikirim ke Binance' : ' · order disimulasikan dengan harga real'}`)
+    }
+  }
+  if (typeof patch.apiKey === 'string') {
+    if (patch.apiKey !== settings.apiKey) liveReconfigure = true
+    settings.apiKey = patch.apiKey.trim()
+  }
+  if (typeof patch.apiSecret === 'string' && patch.apiSecret.trim().length > 0) {
+    if (patch.apiSecret !== settings.apiSecret) liveReconfigure = true
+    settings.apiSecret = patch.apiSecret.trim()
+  }
+  if (typeof patch.testnet === 'boolean') {
+    if (patch.testnet !== settings.testnet) liveReconfigure = true
+    settings.testnet = patch.testnet
+  }
+  settings.riskPerTradePct = num(patch.riskPerTradePct, 0.2, 5, settings.riskPerTradePct)
+  settings.maxOpenPositions = Math.round(num(patch.maxOpenPositions, 1, 10, settings.maxOpenPositions))
+  settings.dailyLossLimitPct = num(patch.dailyLossLimitPct, 1, 30, settings.dailyLossLimitPct)
+  if (patch.startingEquity !== undefined && positions.length === 0) {
+    settings.startingEquity = num(patch.startingEquity, 100, 1_000_000, settings.startingEquity)
+    cash = settings.startingEquity
+  }
+
+  await store.saveSettings({
+    mode: settings.mode,
+    apiKey: settings.apiKey,
+    apiSecret: settings.apiSecret,
+    testnet: String(settings.testnet),
+    riskPerTradePct: String(settings.riskPerTradePct),
+    maxOpenPositions: String(settings.maxOpenPositions),
+    dailyLossLimitPct: String(settings.dailyLossLimitPct),
+    startingEquity: String(settings.startingEquity),
+  })
+
+  if (liveReconfigure && settings.apiKey && settings.apiSecret) {
+    live.configure(settings.apiKey, settings.apiSecret, settings.testnet)
+    await live.loadFilters(ALL_SYMBOLS)
+    const bal = await live.usdtBalance()
+    if (bal !== null) {
+      liveConnected = true
+      liveBalanceUsd = bal
+      log('risk', 'success', `API Binance ${settings.testnet ? 'TESTNET' : 'MAINNET'} terverifikasi — saldo USDT $${bal.toFixed(2)}`)
+    } else {
+      liveConnected = false
+      log('risk', 'danger', 'Verifikasi API gagal — periksa API key/secret, izin Spot trading, dan IP whitelist')
+    }
+  }
+  log('risk', 'info', `Pengaturan disimpan — risiko ${settings.riskPerTradePct}%/trade · maks ${settings.maxOpenPositions} posisi · loss harian ${settings.dailyLossLimitPct}% · ekuitas awal $${settings.startingEquity}`)
+}
+
+const timer = setInterval(mainTick, TICK_MS)
+
+/** UJI PIPELINE — buka satu posisi paper kecil (dipakai verifikasi internal, tidak di UI) */
+async function testTrade() {
+  const symbol = focusSymbol
+  const a = atrMap.get(symbol) ?? 0
+  const sig = {
+    master: 'turtle' as MasterId,
+    stopDist: Math.max(a * 2, market.price(symbol) * 0.002),
+    takeProfitDist: Math.max(a * 6, market.price(symbol) * 0.006),
+    riskPct: 0.5,
+    reason: 'Uji pipeline eksekusi [TEST] — verifikasi entry→manajemen→exit berjalan',
+  }
+  log('risk', 'info', `TEST TRADE dipicu manual pada ${symbol} — memverifikasi pipeline eksekusi penuh`)
+  await openPosition(sig, symbol)
+}
+
+/** UJI PIPELINE — tutup posisi paper terbaru dengan harga pasar sekarang */
+async function testClose() {
+  const pos = [...positions].reverse().find((p) => p.mode === 'PAPER')
+  if (!pos) {
+    log('risk', 'warn', 'TEST CLOSE — tidak ada posisi paper terbuka')
+    return
+  }
+  await closePosition(pos, market.price(pos.symbol), 'Ditutup manual [TEST] — verifikasi jurnal & persistensi')
+}
+
+boot()
+  .then(() => {
+    httpServer.listen(PORT, () => {
+      console.log(`[apex5] engine listening on :${PORT} — pasar real Binance Spot`)
+    })
+  })
+  .catch((e) => {
+    console.error('[apex5] FATAL boot error', e)
+    process.exit(1)
+  })
+
+process.on('SIGTERM', () => {
+  clearInterval(timer)
+  httpServer.close(() => process.exit(0))
+})
+process.on('SIGINT', () => {
+  clearInterval(timer)
+  httpServer.close(() => process.exit(0))
+})

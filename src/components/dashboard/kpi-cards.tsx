@@ -1,121 +1,112 @@
 'use client'
 
+import { Card, CardContent } from '@/components/ui/card'
+import { Wallet, TrendingUp, CalendarDays, Target, Scale, Activity, AlertTriangle, CheckCircle2 } from 'lucide-react'
 import type { EngineState } from '@/lib/engine-types'
 import { fmtUsd, fmtPct } from '@/lib/engine-types'
 import { cn } from '@/lib/utils'
-import { TrendingUp, TrendingDown, Target, Scale, ArrowDownWideNarrow, Waves } from 'lucide-react'
 
-function Card({
+function StatCard({
+  icon: Icon,
   label,
   value,
   sub,
-  icon,
-  tone = 'default',
+  tone = 'neutral',
+  pulse = false,
 }: {
+  icon: React.ComponentType<{ className?: string }>
   label: string
   value: string
-  sub?: string
-  icon: React.ReactNode
-  tone?: 'default' | 'up' | 'down' | 'accent'
+  sub?: React.ReactNode
+  tone?: 'neutral' | 'good' | 'bad' | 'warn'
+  pulse?: boolean
 }) {
+  const toneCls = {
+    neutral: 'text-zinc-100',
+    good: 'text-emerald-400',
+    bad: 'text-rose-400',
+    warn: 'text-amber-400',
+  }[tone]
+  const iconCls = {
+    neutral: 'bg-white/5 text-zinc-400 ring-white/10',
+    good: 'bg-emerald-500/10 text-emerald-400 ring-emerald-500/30',
+    bad: 'bg-rose-500/10 text-rose-400 ring-rose-500/30',
+    warn: 'bg-amber-500/10 text-amber-400 ring-amber-500/30',
+  }[tone]
   return (
-    <div className="rounded-xl border border-white/10 bg-white/[0.03] p-3">
-      <div className="flex items-center justify-between gap-2">
-        <span className="text-[10.5px] font-medium uppercase tracking-wider text-zinc-500">{label}</span>
-        <span
-          className={cn(
-            'flex h-6 w-6 items-center justify-center rounded-md',
-            tone === 'up' && 'bg-emerald-500/10 text-emerald-400',
-            tone === 'down' && 'bg-rose-500/10 text-rose-400',
-            tone === 'accent' && 'bg-amber-500/10 text-amber-400',
-            tone === 'default' && 'bg-white/5 text-zinc-400',
-          )}
-        >
-          {icon}
-        </span>
-      </div>
-      <div
-        className={cn(
-          'mt-1.5 font-mono text-lg font-bold leading-none tracking-tight sm:text-xl',
-          tone === 'up' && 'text-emerald-400',
-          tone === 'down' && 'text-rose-400',
-          tone === 'accent' && 'text-amber-300',
-          tone === 'default' && 'text-zinc-100',
-        )}
-      >
-        {value}
-      </div>
-      {sub && <div className="mt-1 truncate text-[11px] text-zinc-500">{sub}</div>}
-    </div>
+    <Card className="border-white/10 bg-white/[0.02] p-0">
+      <CardContent className="flex items-center gap-3 p-3.5">
+        <div className={cn('flex h-9 w-9 shrink-0 items-center justify-center rounded-lg ring-1', iconCls)}>
+          <Icon className="h-4.5 w-4.5" />
+        </div>
+        <div className="min-w-0 leading-tight">
+          <p className="truncate text-[10.5px] font-medium uppercase tracking-wider text-zinc-500">{label}</p>
+          <p className={cn('truncate font-mono text-[15px] font-bold tabular-nums', toneCls, pulse && 'animate-pulse')}>{value}</p>
+          {sub && <p className="truncate text-[10.5px] text-zinc-500">{sub}</p>}
+        </div>
+      </CardContent>
+    </Card>
   )
 }
 
 export function KpiCards({ state }: { state: EngineState }) {
-  const { account, stats } = state
-  const pnlUp = account.pnl >= 0
+  const a = state.account
+  const s = state.stats
+  const r = state.risk
+  const isLive = a.mode === 'LIVE'
+
   return (
     <div className="grid grid-cols-2 gap-2.5 sm:grid-cols-3 xl:grid-cols-6">
-      <Card
-        label="Ekuitas"
-        value={fmtUsd(account.equity)}
-        sub={`modal awal ${fmtUsd(account.startingEquity)} · kas ${fmtUsd(account.cash)}`}
-        icon={<Waves className="h-3.5 w-3.5" />}
-        tone="default"
+      <StatCard
+        icon={Wallet}
+        label={isLive ? 'Ekuitas (Saldo Bursa)' : 'Ekuitas Paper'}
+        value={fmtUsd(a.equity)}
+        sub={isLive && a.liveBalanceUsd !== null ? `USDT bebas ${fmtUsd(a.liveBalanceUsd)}` : `awal ${fmtUsd(a.startingEquity)}`}
       />
-      <Card
-        label="Total P&L"
-        value={fmtPct(account.pnlPct, true)}
-        sub={`${pnlUp ? '+' : '-'}${fmtUsd(Math.abs(account.pnl)).replace('$', '$')}`}
-        icon={pnlUp ? <TrendingUp className="h-3.5 w-3.5" /> : <TrendingDown className="h-3.5 w-3.5" />}
-        tone={pnlUp ? 'up' : 'down'}
+      <StatCard
+        icon={TrendingUp}
+        label="PnL Total"
+        value={fmtUsd(a.pnl, true)}
+        tone={a.pnl >= 0 ? 'good' : 'bad'}
+        sub={fmtPct(a.pnlPct, true)}
       />
-      <Card
+      <StatCard
+        icon={CalendarDays}
+        label="PnL Harian"
+        value={fmtUsd(r.dailyPnlUsd, true)}
+        tone={r.dailyPnlUsd >= 0 ? 'good' : 'bad'}
+        sub={
+          r.entriesBlocked ? (
+            <span className="flex items-center gap-1 text-amber-400">
+              <AlertTriangle className="h-3 w-3" /> entry ditahan
+            </span>
+          ) : (
+            <span className="flex items-center gap-1">
+              <CheckCircle2 className="h-3 w-3 text-emerald-500" /> batas -{r.dailyLossLimitPct}%
+            </span>
+          )
+        }
+      />
+      <StatCard
+        icon={Target}
         label="Win Rate"
-        value={stats.trades > 0 ? `${stats.winRate.toFixed(1)}%` : '—'}
-        sub={`${stats.wins}W / ${stats.losses}L dari ${stats.trades} trade`}
-        icon={<Target className="h-3.5 w-3.5" />}
-        tone={stats.trades > 0 && stats.winRate >= 50 ? 'up' : 'default'}
+        value={`${s.winRate.toFixed(1)}%`}
+        sub={`${s.wins}W / ${s.losses}L · ${s.trades} trade`}
       />
-      <Card
+      <StatCard
+        icon={Scale}
         label="Profit Factor"
-        value={stats.profitFactor > 0 ? stats.profitFactor.toFixed(2) : '—'}
-        sub={`ekspektasi ${fmtPct(stats.expectancyPct, true)}/trade`}
-        icon={<Scale className="h-3.5 w-3.5" />}
-        tone="accent"
+        value={s.profitFactor >= 99 ? '∞' : s.profitFactor.toFixed(2)}
+        tone={s.profitFactor >= 1.5 ? 'good' : s.profitFactor >= 1 ? 'neutral' : 'bad'}
+        sub={`ekspektasi ${fmtPct(s.expectancyPct, true)}/trade`}
       />
-      <Card
-        label="Avg Slippage"
-        value={stats.trades > 0 ? `${stats.avgSlippagePct.toFixed(2)}%` : '—'}
-        sub={`terbaik ${fmtPct(stats.bestTradePct, true)} · terburuk ${fmtPct(stats.worstTradePct, true)}`}
-        icon={<Waves className="h-3.5 w-3.5" />}
-        tone="default"
+      <StatCard
+        icon={Activity}
+        label="Maks Drawdown"
+        value={fmtPct(-a.maxDrawdownPct)}
+        tone={a.maxDrawdownPct > 10 ? 'warn' : 'neutral'}
+        sub={`eksposur ${fmtPct(r.openExposurePct)} · ${r.openPositions}/${r.maxOpenPositions} posisi`}
       />
-      <Card
-        label="Max Drawdown"
-        value={fmtPct(account.maxDrawdownPct)}
-        sub={`puncak ${fmtUsd(account.peakEquity)} · rug dicegah ${stats.rejectedRugs}`}
-        icon={<ArrowDownWideNarrow className="h-3.5 w-3.5" />}
-        tone={account.maxDrawdownPct > 15 ? 'down' : 'default'}
-      />
-    </div>
-  )
-}
-
-export function StreakBadge({ state }: { state: EngineState }) {
-  const { streak } = state.stats
-  if (streak === 0) return null
-  const hot = streak >= 3
-  const cold = streak <= -3
-  if (!hot && !cold) return null
-  return (
-    <div
-      className={cn(
-        'inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 font-mono text-[11px] font-semibold ring-1',
-        hot ? 'bg-emerald-500/10 text-emerald-300 ring-emerald-500/30' : 'bg-rose-500/10 text-rose-300 ring-rose-500/30',
-      )}
-    >
-      {hot ? <TrendingUp className="h-3 w-3" /> : <TrendingDown className="h-3 w-3" />}
-      streak {streak > 0 ? `+${streak} WIN` : `${streak} LOSS`}
     </div>
   )
 }

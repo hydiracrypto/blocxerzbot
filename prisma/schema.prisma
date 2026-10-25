@@ -1,9 +1,6 @@
 // This is your Prisma schema file,
 // learn more about it in the docs: https://pris.ly/d/prisma-schema
 
-// Looking for ways to speed up your queries, or scale easily with your serverless or edge functions?
-// Try Prisma Accelerate: https://pris.ly/cli/accelerate-init
-
 generator client {
   provider = "prisma-client-js"
 }
@@ -29,4 +26,40 @@ model Post {
   authorId  String
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
+}
+
+// ================= TRADING BOT (REAL MARKET) =================
+
+model BotSetting {
+  id    Int    @id @default(autoincrement())
+  key   String @unique
+  value String
+}
+
+model BotTrade {
+  id         String  @id
+  symbol     String
+  strategy   String // turtle | seykota | schwartz | ptj | bollinger
+  side       String  @default("LONG")
+  sizeUsd    Float
+  qty        Float
+  entryPrice Float
+  exitPrice  Float?
+  pnlUsd     Float?
+  pnlPct     Float?
+  feeUsd     Float   @default(0)
+  reason     String
+  status     String  @default("OPEN") // OPEN | CLOSED
+  mode       String  @default("PAPER") // PAPER | LIVE
+  entryTime  Float
+  exitTime   Float?
+  meta       String? // JSON: stop, tp, peak, thesis, slippage, exchangeOrderId
+  createdAt  DateTime @default(now())
+}
+
+model BotEquity {
+  id     Int    @id @default(autoincrement())
+  t      Float // timestamp ms
+  equity Float
+  cash   Float
 }
