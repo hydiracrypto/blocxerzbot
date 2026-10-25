@@ -52,3 +52,11 @@ prompt
 server.log
 # Skills directory
 /skills/
+# BLOCXERZ — jangan upload data lokal & sensitif ke GitHub
+db/
+download/
+upload/
+worklog.md
+ra*.jpg
+.zscripts/
+*.pid
