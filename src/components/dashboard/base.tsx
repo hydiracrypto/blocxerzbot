@@ -46,7 +46,7 @@ export interface StatusResponse {
   dailyGuard: boolean
   openCount: number
   lastSignalAt: string | null
-  sources: Record<string, { ok: boolean }>
+  sources: Record<string, { ok: boolean; bannedUntil?: number; banReason?: string }>
   scanRows: ScanRow[]
   radarRows: RadarRow[]
 }

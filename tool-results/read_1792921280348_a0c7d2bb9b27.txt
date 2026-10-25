@@ -1,0 +1,719 @@
+     1→// ═══════════════════════════════════════════════════════════════════════
+     2→// ORCHESTRATOR — 6 Agent Otonom bekerja 24/7
+     3→// Pair Scanner → Volume Radar → Strategy Engine → Position Sizer →
+     4→// Executor → Risk Monitor
+     5→// ═══════════════════════════════════════════════════════════════════════
+     6→import { db } from '@/lib/db'
+     7→import {
+     8→  getUniverse,
+     9→  getAllTickers,
+    10→  getKlines,
+    11→  TF_MS,
+    12→  type SourceId,
+    13→} from '@/lib/mexc/market-data'
+    14→import {
+    15→  evaluate,
+    16→  DEFAULT_PARAMS,
+    17→  type StrategyParams,
+    18→  type StrategyResult,
+    19→} from '@/lib/strategy/blocxerz'
+    20→import { getSettings, getOrchState, saveSettings, type BotSettings } from '@/lib/agents/state'
+    21→import { validateKeys, setLeverage, submitOrder, cancelAllSymbolOrders, coinToContracts, SIDE, type MexcKeys } from '@/lib/mexc/trader'
+    22→
+    23→const CYCLE_MS = 20_000
+    24→
+    25→function nowIso() {
+    26→  return new Date().toISOString()
+    27→}
+    28→
+    29→async function log(agent: string, level: 'info' | 'warn' | 'error' | 'signal' | 'trade', message: string, meta?: unknown) {
+    30→  try {
+    31→    await db.agentLog.create({
+    32→      data: { agent, level, message, meta: meta ? JSON.stringify(meta) : null },
+    33→    })
+    34→  } catch {
+    35→    // ignore db errors pada logging
+    36→  }
+    37→}
+    38→
+    39→async function touch(agentId: string, action: string, status: 'ACTIVE' | 'IDLE' | 'ERROR' = 'ACTIVE') {
+    40→  const st = getOrchState()
+    41→  const a = st.agents.find((x) => x.id === agentId)
+    42→  if (a) {
+    43→    a.ticks++
+    44→    a.lastAction = action
+    45→    a.lastTickAt = nowIso()
+    46→    a.status = status
+    47→  }
+    48→}
+    49→
+    50→async function failAgent(agentId: string, err: string) {
+    51→  const st = getOrchState()
+    52→  const a = st.agents.find((x) => x.id === agentId)
+    53→  if (a) {
+    54→    a.errors++
+    55→    a.status = 'ERROR'
+    56→    a.lastAction = err.slice(0, 120)
+    57→    a.lastTickAt = nowIso()
+    58→  }
+    59→}
+    60→
+    61→export async function botLog(agent: string, level: 'info' | 'warn' | 'error' | 'signal' | 'trade', message: string, meta?: unknown) {
+    62→  await log(agent, level, message, meta)
+    63→}
+    64→
+    65→// ═══════════════════════════════════════════════════════════════════════
+    66→// AGENT 1 — PAIR SCANNER
+    67→// ═══════════════════════════════════════════════════════════════════════
+    68→// Stablecoin & aset non-tradeable: volume besar tapi tidak relevan untuk sinyal
+    69→const STABLE_BASES = /^(USDC|TUSD|FDUSD|DAI|BUSD|USDP|USD1|PYUSD|USDE|USDtb|EURI|EURC|AEUR|XUSD|USDS|FRAX|PAXG|XAUT|WBTC|WBETH|WSTETH|STETH)$/i
+    70→
+    71→async function agent1Scanner(s: BotSettings) {
+    72→  const st = getOrchState()
+    73→  try {
+    74→    const uni = await getUniverse()
+    75→    const tk = await getAllTickers()
+    76→    st.marketSource = uni.source
+    77→
+    78→    const rows = uni.items
+    79→      .map((u) => {
+    80→        const t = tk.map.get(u.symbol)
+    81→        return {
+    82→          symbol: u.symbol,
+    83→          price: t?.lastPrice ?? 0,
+    84→          changeRate: t?.changeRate ?? 0,
+    85→          quoteVolume: t?.quoteVolume ?? 0,
+    86→          source: tk.source,
+    87→        }
+    88→      })
+    89→      .filter((r) => r.price > 0 && r.quoteVolume >= s.minVolUsd && !STABLE_BASES.test(r.symbol.replace('_USDT', '')))
+    90→      .sort((a, b) => b.quoteVolume - a.quoteVolume)
+    91→
+    92→    const watch = rows.slice(0, s.maxWatch).map((r) => r.symbol)
+    93→    st.watchlist = watch
+    94→    st.scanRows = rows.slice(0, 50).map((r, i) => ({ ...r, rank: i + 1, watched: watch.includes(r.symbol) }))
+    95→
+    96→    await touch('A1', `Memindai ${uni.items.length} aset · watchlist top ${watch.length} · vol ≥ ${fmtUsd(s.minVolUsd)}`)
+    97→  } catch (e) {
+    98→    await failAgent('A1', e instanceof Error ? e.message : String(e))
+    99→    await log('A1', 'error', `Scanner gagal: ${e instanceof Error ? e.message : e}`)
+   100→  }
+   101→}
+   102→
+   103→function fmtUsd(v: number): string {
+   104→  if (v >= 1e9) return (v / 1e9).toFixed(1) + 'B'
+   105→  if (v >= 1e6) return (v / 1e6).toFixed(0) + 'M'
+   106→  return v.toFixed(0)
+   107→}
+   108→
+   109→// ═══════════════════════════════════════════════════════════════════════
+   110→// AGENT 2 — VOLUME RADAR
+   111→// ═══════════════════════════════════════════════════════════════════════
+   112→async function agent2VolumeRadar(s: BotSettings) {
+   113→  const st = getOrchState()
+   114→  try {
+   115→    const rows: typeof st.radarRows = []
+   116→    for (const sym of st.watchlist) {
+   117→      const prev = st.results.get(sym)
+   118→      const t = st.scanRows.find((r) => r.symbol === sym)
+   119→      if (!t) continue
+   120→      let volSpike = prev ? 1 : 1
+   121→      if (prev && prev.atr > 0) {
+   122→        volSpike = (prev as StrategyResult & { volSpike?: number }).volSpike ?? 1
+   123→      }
+   124→      const radarScore = Math.min(100, Math.round((t.quoteVolume / (s.minVolUsd * 10)) * 30 + Math.abs(t.changeRate) * 800 + volSpike * 20))
+   125→      rows.push({ symbol: sym, price: t.price, changeRate: t.changeRate, quoteVolume: t.quoteVolume, volSpike, score: radarScore })
+   126→    }
+   127→    rows.sort((a, b) => b.score - a.score)
+   128→    st.radarRows = rows.slice(0, 15)
+   129→    const hot = rows.filter((r) => r.score >= 60).length
+   130→    await touch('A2', `Radar ${rows.length} pair · ${hot} momentum panas`)
+   131→  } catch (e) {
+   132→    await failAgent('A2', e instanceof Error ? e.message : String(e))
+   133→  }
+   134→}
+   135→
+   136→// ═══════════════════════════════════════════════════════════════════════
+   137→// AGENT 3 — STRATEGY ENGINE (BLOCXERZ v3.0)
+   138→// ═══════════════════════════════════════════════════════════════════════
+   139→async function agent3Strategy(s: BotSettings) {
+   140→  const st = getOrchState()
+   141→  const params: StrategyParams = {
+   142→    ...DEFAULT_PARAMS,
+   143→    minScore: s.minScore,
+   144→    qmMinScore: s.qmMinScore,
+   145→    allowFlip: s.allowFlip,
+   146→  }
+   147→
+   148→  let evaluated = 0
+   149→  let newBars = 0
+   150→  const signals: StrategyResult[] = []
+   151→
+   152→  for (const sym of st.watchlist) {
+   153→    try {
+   154→      // 15m: 1000 bar (zona), 30m/1h: 400, 4h: 400 (EMA200), 1d: 40, 1w: 40
+   155→      const [m15, m30, h1, h4, d1, w1] = await Promise.all([
+   156→        getKlines(sym, '15m', 1000),
+   157→        getKlines(sym, '30m', 400),
+   158→        getKlines(sym, '1h', 400),
+   159→        getKlines(sym, '4h', 400),
+   160→        getKlines(sym, '1d', 40),
+   161→        getKlines(sym, '1w', 40),
+   162→      ])
+   163→      evaluated++
+   164→
+   165→      const lastClosedT = m15.candles.length >= 2 ? m15.candles[m15.candles.length - 2].t : -1
+   166→      const prev = st.results.get(sym)
+   167→      if (prev && prev.barT === lastClosedT) continue // belum ada bar 15m baru yang closed
+   168→      newBars++
+   169→
+   170→      // gunakan candle CLOSED saja (buang bar berjalan)
+   171→      const res = evaluate(sym, {
+   172→        m15: m15.candles.slice(0, -1),
+   173→        m30: m30.candles.slice(0, -1),
+   174→        h1: h1.candles.slice(0, -1),
+   175→        h4: h4.candles.slice(0, -1),
+   176→        d1: d1.candles,
+   177→        w1: w1.candles,
+   178→        source: m15.source,
+   179→      }, params)
+   180→
+   181→      if (!res) continue
+   182→      // volSpike utk radar
+   183→      const volSpike = res.factors.buy[6] || res.factors.sell[6] ? 1.5 : 1
+   184→      ;(res as StrategyResult & { volSpike?: number }).volSpike = volSpike
+   185→      st.results.set(sym, res)
+   186→
+   187→      if (res.signal) {
+   188→        signals.push(res)
+   189→        await log('A3', 'signal', `SINYAL ${res.signal.dir === 1 ? 'LONG' : 'SHORT'} ${sym} · skor ${res.signal.score}/8${res.signal.isQM ? ' · QM' : ''} · E ${res.signal.entry.toFixed(res.price >= 100 ? 2 : 5)}`, {
+   190→          dir: res.signal.dir,
+   191→          factors: res.signal.factors,
+   192→          bias: res.bias.reason,
+   193→        })
+   194→      }
+   195→    } catch (e) {
+   196→      // sumber data gagal untuk simbol ini — lanjut
+   197→      const msg = e instanceof Error ? e.message : String(e)
+   198→      if (msg.includes('Semua sumber')) {
+   199→        await failAgent('A3', `${sym}: data tidak tersedia`)
+   200→      }
+   201→    }
+   202→  }
+   203→
+   204→  await touch('A3', `Eval ${evaluated} pair · ${newBars} bar baru · ${signals.length} sinyal`)
+   205→  return signals
+   206→}
+   207→
+   208→// ═══════════════════════════════════════════════════════════════════════
+   209→// AGENT 4 — POSITION SIZER
+   210→// ═══════════════════════════════════════════════════════════════════════
+   211→interface SizedTrade {
+   212→  qtyCoin: number
+   213→  notional: number
+   214→  margin: number
+   215→  riskUsd: number
+   216→  leverage: number
+   217→  skip?: string
+   218→}
+   219→
+   220→async function getEquity(s: BotSettings): Promise<number> {
+   221→  if (s.mode === 'LIVE' && validateKeys({ apiKey: s.apiKey, secret: s.apiSecret })) {
+   222→    try {
+   223→      const { getAccountAssets } = await import('@/lib/mexc/trader')
+   224→      const assets = await getAccountAssets({ apiKey: s.apiKey, secret: s.apiSecret })
+   225→      const usdt = assets.find((a) => a.currency === 'USDT')
+   226→      if (usdt) {
+   227→        const eq = Number(usdt.equilibrium ?? usdt.availableBalance ?? 0)
+   228→        if (eq > 0) return eq
+   229→      }
+   230→    } catch {
+   231→      // fallback ke paper equity
+   232→    }
+   233→  }
+   234→  const state = await db.botState.findUnique({ where: { id: 'main' } })
+   235→  const realized = await db.trade.aggregate({ _sum: { pnl: true } })
+   236→  return (state?.paperEquity ?? s.paperEquity) + (realized._sum.pnl ?? 0)
+   237→}
+   238→
+   239→async function agent4Sizer(s: BotSettings, res: StrategyResult, openPositions: number): Promise<SizedTrade> {
+   240→  const sig = res.signal!
+   241→  const equity = await getEquity(s)
+   242→  const riskUsd = equity * (s.riskPct / 100)
+   243→  const slDist = Math.abs(sig.entry - sig.sl)
+   244→
+   245→  if (slDist <= 0) return { qtyCoin: 0, notional: 0, margin: 0, riskUsd, leverage: s.leverage, skip: 'SL distance invalid' }
+   246→
+   247→  const qtyCoin = riskUsd / slDist
+   248→  const notional = qtyCoin * sig.entry
+   249→  const minNotional = 5
+   250→
+   251→  if (notional < minNotional) {
+   252→    // naikkan qty ke minimal notional bila margin memadai
+   253→    const adjQty = minNotional / sig.entry
+   254→    const adjRisk = adjQty * slDist
+   255→    if (adjRisk <= riskUsd * 3 && equity > minNotional) {
+   256→      return { qtyCoin: adjQty, notional: minNotional, margin: minNotional / s.leverage, riskUsd: adjRisk, leverage: s.leverage }
+   257→    }
+   258→    return { qtyCoin: 0, notional: 0, margin: 0, riskUsd, leverage: s.leverage, skip: `Notional < $${minNotional} (equity kecil)` }
+   259→  }
+   260→
+   261→  const margin = notional / s.leverage
+   262→  if (margin > equity * 0.5) {
+   263→    return { qtyCoin: 0, notional: 0, margin: 0, riskUsd, leverage: s.leverage, skip: 'Margin > 50% equity' }
+   264→  }
+   265→
+   266→  await touch('A4', `Size ${res.symbol}: qty ${qtyCoin.toFixed(6)} · notional $${notional.toFixed(1)} · risk $${riskUsd.toFixed(2)}`)
+   267→  return { qtyCoin, notional, margin, riskUsd, leverage: s.leverage }
+   268→}
+   269→
+   270→// ═══════════════════════════════════════════════════════════════════════
+   271→// AGENT 5 — EXECUTOR
+   272→// ═══════════════════════════════════════════════════════════════════════
+   273→async function agent5Execute(s: BotSettings, res: StrategyResult, size: SizedTrade, openPos: { id: string; side: number } | null) {
+   274→  const st = getOrchState()
+   275→  const sig = res.signal!
+   276→  const dir = sig.dir
+   277→
+   278→  // FLIP: posisi terbuka lawan arah → tutup dulu
+   279→  if (openPos && openPos.side !== dir && s.allowFlip) {
+   280→    await closePosition(openPos.id, sig.entry, 'FLIP')
+   281→  } else if (openPos) {
+   282→    return { skipped: 'Posisi sudah terbuka' }
+   283→  }
+   284→
+   285→  if (size.skip) return { skipped: size.skip }
+   286→
+   287→  const feeRate = s.feePct / 100
+   288→  const entryFee = size.notional * feeRate
+   289→
+   290→  if (s.mode === 'LIVE' && validateKeys({ apiKey: s.apiKey, secret: s.apiSecret })) {
+   291→    const keys: MexcKeys = { apiKey: s.apiKey, secret: s.apiSecret }
+   292→    const uni = await getUniverse()
+   293→    const contract = uni.items.find((u) => u.symbol === res.symbol)
+   294→    const contractSize = contract?.contractSize ?? 1
+   295→    try {
+   296→      await setLeverage(keys, res.symbol, Math.round(s.leverage)).catch(() => undefined)
+   297→      const entryOrder = await submitOrder(keys, {
+   298→        symbol: res.symbol,
+   299→        side: dir === 1 ? SIDE.OPEN_LONG : SIDE.OPEN_SHORT,
+   300→        vol: coinToContracts(size.qtyCoin, contractSize),
+   301→        leverage: Math.round(s.leverage),
+   302→      })
+   303→      if (!entryOrder.ok) {
+   304→        await log('A5', 'error', `Order entry ${res.symbol} GAGAL: ${entryOrder.error}`)
+   305→        return { skipped: `Exchange: ${entryOrder.error}` }
+   306→      }
+   307→      // SL + TP trigger orders
+   308→      const remain = size.qtyCoin
+   309→      const q1 = s.tpMode === 'LADDER' ? remain * 0.33 : remain
+   310→      const q2 = s.tpMode === 'LADDER' ? remain * 0.33 : remain
+   311→      const q3 = s.tpMode === 'LADDER' ? remain * 0.34 : remain
+   312→      await submitOrder(keys, { symbol: res.symbol, side: dir === 1 ? SIDE.CLOSE_LONG : SIDE.CLOSE_SHORT, vol: coinToContracts(remain, contractSize), triggerPrice: sig.sl, leverage: Math.round(s.leverage) })
+   313→      await submitOrder(keys, { symbol: res.symbol, side: dir === 1 ? SIDE.CLOSE_LONG : SIDE.CLOSE_SHORT, vol: coinToContracts(q1, contractSize), triggerPrice: sig.tp1, leverage: Math.round(s.leverage) })
+   314→      await submitOrder(keys, { symbol: res.symbol, side: dir === 1 ? SIDE.CLOSE_LONG : SIDE.CLOSE_SHORT, vol: coinToContracts(q2, contractSize), triggerPrice: sig.tp2, leverage: Math.round(s.leverage) })
+   315→      await submitOrder(keys, { symbol: res.symbol, side: dir === 1 ? SIDE.CLOSE_LONG : SIDE.CLOSE_SHORT, vol: coinToContracts(q3, contractSize), triggerPrice: sig.tp3, leverage: Math.round(s.leverage) })
+   316→
+   317→      await db.position.create({
+   318→        data: {
+   319→          symbol: res.symbol,
+   320→          side: dir,
+   321→          qtyCoin: size.qtyCoin,
+   322→          remainCoin: size.qtyCoin,
+   323→          entryPrice: sig.entry,
+   324→          sl: sig.sl,
+   325→          tp1: sig.tp1,
+   326→          tp2: sig.tp2,
+   327→          tp3: sig.tp3,
+   328→          leverage: s.leverage,
+   329→          margin: size.margin,
+   330→          riskUsd: size.riskUsd,
+   331→          notional: size.notional,
+   332→          score: sig.score,
+   333→          isQM: sig.isQM,
+   334→          mode: 'LIVE',
+   335→          exchangeId: entryOrder.orderId,
+   336→        },
+   337→      })
+   338→      await log('A5', 'trade', `LIVE OPEN ${dir === 1 ? 'LONG' : 'SHORT'} ${res.symbol} · ${size.qtyCoin.toFixed(6)} @ ${sig.entry} · orderId ${entryOrder.orderId}`)
+   339→      await touch('A5', `LIVE ${dir === 1 ? 'LONG' : 'SHORT'} ${res.symbol} terkirim ke MEXC`)
+   340→      st.dailyGuardTriggered = false
+   341→      return { ok: true }
+   342→    } catch (e) {
+   343→      const msg = e instanceof Error ? e.message : String(e)
+   344→      await log('A5', 'error', `Eksekusi LIVE ${res.symbol} error: ${msg}`)
+   345→      return { skipped: msg }
+   346→    }
+   347→  }
+   348→
+   349→  // ── PAPER EXECUTION ──
+   350→  await db.position.create({
+   351→    data: {
+   352→      symbol: res.symbol,
+   353→      side: dir,
+   354→      qtyCoin: size.qtyCoin,
+   355→      remainCoin: size.qtyCoin,
+   356→      entryPrice: sig.entry,
+   357→      sl: sig.sl,
+   358→      tp1: sig.tp1,
+   359→      tp2: sig.tp2,
+   360→      tp3: sig.tp3,
+   361→      leverage: s.leverage,
+   362→      margin: size.margin,
+   363→      riskUsd: size.riskUsd,
+   364→      notional: size.notional,
+   365→      score: sig.score,
+   366→      isQM: sig.isQM,
+   367→      mode: 'PAPER',
+   368→    },
+   369→  })
+   370→  await log('A5', 'trade', `PAPER OPEN ${dir === 1 ? 'LONG' : 'SHORT'} ${res.symbol} · qty ${size.qtyCoin.toFixed(6)} @ ${sig.entry.toFixed(sig.entry >= 100 ? 2 : 5)} · SL ${sig.sl.toFixed(sig.sl >= 100 ? 2 : 5)} · TP2 ${sig.tp2.toFixed(sig.tp2 >= 100 ? 2 : 5)}`)
+   371→  await touch('A5', `${dir === 1 ? 'LONG' : 'SHORT'} ${res.symbol} dieksekusi (${s.mode})`)
+   372→  return { ok: true }
+   373→}
+   374→
+   375→// ═══════════════════════════════════════════════════════════════════════
+   376→// POSITION CLOSE HELPER (dipakai Agent 5 FLIP & Agent 6)
+   377→// ═══════════════════════════════════════════════════════════════════════
+   378→export async function closePosition(posId: string, exitPrice: number, reason: 'TP1' | 'TP2' | 'TP3' | 'SL' | 'FLIP' | 'MANUAL', closeQty?: number) {
+   379→  const s = await getSettings()
+   380→  const pos = await db.position.findUnique({ where: { id: posId } })
+   381→  if (!pos || pos.status !== 'OPEN') return
+   382→
+   383→  const qty = Math.min(closeQty ?? pos.remainCoin, pos.remainCoin)
+   384→  if (qty <= 0) return
+   385→
+   386→  const dir = pos.side
+   387→  const grossPnl = (exitPrice - pos.entryPrice) * qty * dir
+   388→  const feeRate = s.feePct / 100
+   389→  const fees = (qty * pos.entryPrice + qty * exitPrice) * feeRate
+   390→  const pnl = grossPnl - fees
+   391→  const pnlPct = pos.margin > 0 ? (pnl / pos.margin) * 100 : 0
+   392→
+   393→  await db.trade.create({
+   394→    data: {
+   395→      positionId: pos.id,
+   396→      symbol: pos.symbol,
+   397→      side: pos.side,
+   398→      qtyCoin: qty,
+   399→      entryPrice: pos.entryPrice,
+   400→      exitPrice,
+   401→      pnl,
+   402→      pnlPct,
+   403→      reason,
+   404→      mode: pos.mode,
+   405→    },
+   406→  })
+   407→
+   408→  const remain = pos.remainCoin - qty
+   409→  const fullyClosed = remain <= pos.qtyCoin * 0.001 || reason === 'SL' || reason === 'TP3' || reason === 'FLIP' || reason === 'MANUAL'
+   410→
+   411→  // LIVE: kirim order penutup ke exchange
+   412→  if (pos.mode === 'LIVE' && validateKeys({ apiKey: s.apiKey, secret: s.apiSecret })) {
+   413→    const keys: MexcKeys = { apiKey: s.apiKey, secret: s.apiSecret }
+   414→    const uni = await getUniverse()
+   415→    const contract = uni.items.find((u) => u.symbol === pos.symbol)
+   416→    const contractSize = contract?.contractSize ?? 1
+   417→    try {
+   418→      await cancelAllSymbolOrders(keys, pos.symbol)
+   419→      if (fullyClosed) {
+   420→        await submitOrder(keys, {
+   421→          symbol: pos.symbol,
+   422→          side: dir === 1 ? SIDE.CLOSE_LONG : SIDE.CLOSE_SHORT,
+   423→          vol: coinToContracts(remain > 0 ? remain : pos.remainCoin, contractSize),
+   424→        })
+   425→      } else {
+   426→        await submitOrder(keys, {
+   427→          symbol: pos.symbol,
+   428→          side: dir === 1 ? SIDE.CLOSE_LONG : SIDE.CLOSE_SHORT,
+   429→          vol: coinToContracts(qty, contractSize),
+   430→        })
+   431→        // pasang ulang SL trigger utk sisa posisi
+   432→        const newSl = reason === 'TP1' ? pos.entryPrice : reason === 'TP2' ? pos.tp1 : pos.sl
+   433→        await submitOrder(keys, {
+   434→          symbol: pos.symbol,
+   435→          side: dir === 1 ? SIDE.CLOSE_LONG : SIDE.CLOSE_SHORT,
+   436→          vol: coinToContracts(remain, contractSize),
+   437→          triggerPrice: newSl,
+   438→        })
+   439→      }
+   440→    } catch (e) {
+   441→      await log('A6', 'error', `LIVE close ${pos.symbol} gagal: ${e instanceof Error ? e.message : e}`)
+   442→    }
+   443→  }
+   444→
+   445→  await db.position.update({
+   446→    where: { id: pos.id },
+   447→    data: {
+   448→      remainCoin: fullyClosed ? 0 : remain,
+   449→      status: fullyClosed ? 'CLOSED' : 'OPEN',
+   450→      exitPrice: fullyClosed ? exitPrice : pos.exitPrice,
+   451→      exitReason: fullyClosed ? reason : pos.exitReason,
+   452→      pnl: pos.pnl + pnl,
+   453→      closedAt: fullyClosed ? new Date() : pos.closedAt,
+   454→      beMoved: reason === 'TP1' || pos.beMoved,
+   455→      tp1Hit: reason === 'TP1' || pos.tp1Hit,
+   456→      tp2Hit: reason === 'TP2' || pos.tp2Hit,
+   457→      sl: reason === 'TP1' && !fullyClosed ? pos.entryPrice : reason === 'TP2' && !fullyClosed ? pos.tp1 : pos.sl,
+   458→    },
+   459→  })
+   460→
+   461→  await log('A6', 'trade', `CLOSE ${reason} ${pos.symbol} ${dir === 1 ? 'LONG' : 'SHORT'} · qty ${qty.toFixed(6)} @ ${exitPrice.toFixed(exitPrice >= 100 ? 2 : 5)} · PnL ${pnl >= 0 ? '+' : ''}${pnl.toFixed(2)} USDT (${pnlPct.toFixed(1)}%)`)
+   462→
+   463→  const st = getOrchState()
+   464→  await touch('A6', `${reason} ${pos.symbol} · PnL ${pnl >= 0 ? '+' : ''}${pnl.toFixed(2)}`)
+   465→  void st
+   466→}
+   467→
+   468→// ═══════════════════════════════════════════════════════════════════════
+   469→// AGENT 6 — RISK MONITOR (supervisi posisi 24/7)
+   470→// ═══════════════════════════════════════════════════════════════════════
+   471→async function agent6Monitor(s: BotSettings) {
+   472→  const st = getOrchState()
+   473→  try {
+   474→    const positions = await db.position.findMany({ where: { status: 'OPEN' } })
+   475→    if (positions.length === 0) {
+   476→      await touch('A6', 'Tidak ada posisi terbuka · supervisi aktif')
+   477→      return
+   478→    }
+   479→
+   480→    // daily loss guard
+   481→    const today = new Date().toISOString().slice(0, 10)
+   482→    if (st.dailyGuardDate !== today) {
+   483→      st.dailyGuardDate = today
+   484→      st.dailyGuardTriggered = false
+   485→    }
+   486→    if (!st.dailyGuardTriggered) {
+   487→      const todays = await db.trade.findMany({ where: { closedAt: { gte: new Date(today + 'T00:00:00.000Z') } } })
+   488→      const dayPnl = todays.reduce((x, t) => x + t.pnl, 0)
+   489→      const equity = await getEquity(s)
+   490→      if (dayPnl < 0 && Math.abs(dayPnl) >= equity * (s.maxDailyLossPct / 100)) {
+   491→        st.dailyGuardTriggered = true
+   492→        await log('A6', 'warn', `GUARD: Batas loss harian ${s.maxDailyLossPct}% tercapai (−${Math.abs(dayPnl).toFixed(2)}). Posisi baru ditahan sampai besok.`)
+   493→      }
+   494→    }
+   495→
+   496→    let actions = 0
+   497→    for (const pos of positions) {
+   498→      try {
+   499→        const price = await lastPriceFor(pos.symbol)
+   500→        if (!price) continue
+   501→        const dir = pos.side
+   502→
+   503→        // SL check (prioritas seperti Pine: SL > TP)
+   504→        if ((dir === 1 && price <= pos.sl) || (dir === -1 && price >= pos.sl)) {
+   505→          await closePosition(pos.id, pos.sl, 'SL')
+   506→          actions++
+   507→          continue
+   508→        }
+   509→        // TP3
+   510→        if ((dir === 1 && price >= pos.tp3) || (dir === -1 && price <= pos.tp3)) {
+   511→          await closePosition(pos.id, pos.tp3, 'TP3')
+   512→          actions++
+   513→          continue
+   514→        }
+   515→        // TP2
+   516→        if (!pos.tp2Hit && ((dir === 1 && price >= pos.tp2) || (dir === -1 && price <= pos.tp2))) {
+   517→          if (s.tpMode === 'LADDER') {
+   518→            await closePosition(pos.id, pos.tp2, 'TP2', pos.qtyCoin * 0.33)
+   519→          } else {
+   520→            await db.position.update({ where: { id: pos.id }, data: { tp2Hit: true, sl: pos.tp1 } })
+   521→            await log('A6', 'info', `TP2 ${pos.symbol} tersentuh · SL digeser ke TP1`)
+   522→          }
+   523→          actions++
+   524→          continue
+   525→        }
+   526→        // TP1 → partial close + SL ke breakeven
+   527→        if (!pos.tp1Hit && ((dir === 1 && price >= pos.tp1) || (dir === -1 && price <= pos.tp1))) {
+   528→          if (s.tpMode === 'LADDER') {
+   529→            await closePosition(pos.id, pos.tp1, 'TP1', pos.qtyCoin * 0.33)
+   530→          } else {
+   531→            await db.position.update({ where: { id: pos.id }, data: { tp1Hit: true, beMoved: true, sl: pos.entryPrice } })
+   532→            await log('A6', 'info', `TP1 ${pos.symbol} tersentuh · SL digeser ke breakeven`)
+   533→          }
+   534→          actions++
+   535→        }
+   536→      } catch (e) {
+   537→        await failAgent('A6', e instanceof Error ? e.message : String(e))
+   538→      }
+   539→    }
+   540→
+   541→    await touch(
+   542→      'A6',
+   543→      `Supervisi ${positions.length} posisi · ${actions} aksi risk management`
+   544→    )
+   545→  } catch (e) {
+   546→    await failAgent('A6', e instanceof Error ? e.message : String(e))
+   547→  }
+   548→}
+   549→
+   550→async function lastPriceFor(symbol: string): Promise<number | null> {
+   551→  const st = getOrchState()
+   552→  const row = st.scanRows.find((r) => r.symbol === symbol)
+   553→  if (row && row.price > 0) return row.price
+   554→  try {
+   555→    const k = await getKlines(symbol, '15m', 3)
+   556→    return k.candles[k.candles.length - 1]?.c ?? null
+   557→  } catch {
+   558→    return null
+   559→  }
+   560→}
+   561→
+   562→// ═══════════════════════════════════════════════════════════════════════
+   563→// MAIN CYCLE — 6 agent bekerja berurutan setiap 20 detik
+   564→// ═══════════════════════════════════════════════════════════════════════
+   565→async function runCycle() {
+   566→  const st = getOrchState()
+   567→  if (st.busy) return
+   568→  st.busy = true
+   569→  try {
+   570→    const s = await getSettings()
+   571→    if (!st.running) {
+   572→      st.busy = false
+   573→      return
+   574→    }
+   575→
+   576→    // A1 — Pair Scanner
+   577→    await agent1Scanner(s)
+   578→
+   579→    // A2 — Volume Radar
+   580→    await agent2VolumeRadar(s)
+   581→
+   582→    // A3 — Strategy Engine
+   583→    const signals = await agent3Strategy(s)
+   584→
+   585→    // A4+A5 — Position Sizer + Executor utk sinyal baru
+   586→    if (signals.length > 0 && !st.dailyGuardTriggered) {
+   587→      const openPositions = await db.position.findMany({ where: { status: 'OPEN' } })
+   588→      for (const res of signals) {
+   589→        const openCount = openPositions.filter((p) => p.status === 'OPEN').length
+   590→        const existing = openPositions.find((p) => p.symbol === res.symbol && p.status === 'OPEN')
+   591→        if (!existing && openCount >= s.maxPositions) {
+   592→          await db.signal.create({
+   593→            data: signalRow(res, s, false, `Max ${s.maxPositions} posisi tercapai`),
+   594→          })
+   595→          await log('A5', 'warn', `Sinyal ${res.symbol} dilewati: max ${s.maxPositions} posisi`)
+   596→          continue
+   597→        }
+   598→        const size = await agent4Sizer(s, res, openCount)
+   599→        const execRes = await agent5Execute(s, res, size, existing ? { id: existing.id, side: existing.side } : null)
+   600→        const executed = 'ok' in execRes && execRes.ok
+   601→        await db.signal.create({
+   602→          data: signalRow(res, s, executed, 'skipped' in execRes && execRes.skipped ? execRes.skipped : null),
+   603→        })
+   604→      }
+   605→    } else if (signals.length > 0) {
+   606→      for (const res of signals) {
+   607→        await db.signal.create({ data: signalRow(res, s, false, 'Daily loss guard aktif') })
+   608→      }
+   609→    }
+   610→
+   611→    // A6 — Risk Monitor
+   612→    await agent6Monitor(s)
+   613→
+   614→    st.cycles++
+   615→    st.lastTickAt = nowIso()
+   616→    await db.botState.upsert({
+   617→      where: { id: 'main' },
+   618→      update: { cycles: st.cycles, lastTickAt: new Date(), running: st.running, dataSource: st.marketSource },
+   619→      create: { id: 'main', cycles: st.cycles, running: st.running, dataSource: st.marketSource },
+   620→    })
+   621→  } catch (e) {
+   622→    await log('SYS', 'error', `Cycle error: ${e instanceof Error ? e.message : e}`)
+   623→  } finally {
+   624→    st.busy = false
+   625→  }
+   626→}
+   627→
+   628→function signalRow(res: StrategyResult, s: BotSettings, executed: boolean, skipReason: string | null) {
+   629→  const sig = res.signal!
+   630→  return {
+   631→    symbol: res.symbol,
+   632→    direction: sig.dir,
+   633→    isQM: sig.isQM,
+   634→    score: sig.score,
+   635→    factors: JSON.stringify(sig.factors),
+   636→    entry: sig.entry,
+   637→    sl: sig.sl,
+   638→    tp1: sig.tp1,
+   639→    tp2: sig.tp2,
+   640→    tp3: sig.tp3,
+   641→    riskUsd: 0,
+   642→    qtyCoin: 0,
+   643→    timeframe: '15m',
+   644→    dataSource: res.source,
+   645→    executed,
+   646→    skipReason,
+   647→  }
+   648→}
+   649→
+   650→// ═══════════════════════════════════════════════════════════════════════
+   651→// BOOT / CONTROL
+   652→// ═══════════════════════════════════════════════════════════════════════
+   653→const CODE_VERSION = '2025-10-25.2'
+   654→
+   655→export function startBot(): void {
+   656→  const st = getOrchState()
+   657→  if (st.running && st.timer) return
+   658→  st.running = true
+   659→  st.startedAt = st.startedAt ?? Date.now()
+   660→  if (!st.timer) {
+   661→    st.timer = setInterval(() => {
+   662→      void runCycle()
+   663→    }, CYCLE_MS)
+   664→    // jalankan cycle pertama segera
+   665→    void runCycle()
+   666→  }
+   667→  void log('SYS', 'info', 'BOT START — 6 Agent Otonom aktif 24/7 · MEXC Futures')
+   668→}
+   669→
+   670→export function stopBot(): void {
+   671→  const st = getOrchState()
+   672→  st.running = false
+   673→  if (st.timer) {
+   674→    clearInterval(st.timer)
+   675→    st.timer = null
+   676→  }
+   677→  void log('SYS', 'warn', 'BOT STOP — semua agent dijeda')
+   678→}
+   679→
+   680→export async function ensureBoot(): Promise<void> {
+   681→  const st = getOrchState()
+   682→  try {
+   683→    const s = await getSettings()
+   684→
+   685→    // Hot-reload: bila kode orchestrator berubah, ganti timer lama dgn siklus baru
+   686→    if (st.codeVersion !== CODE_VERSION) {
+   687→      if (st.timer) {
+   688→        clearInterval(st.timer)
+   689→        st.timer = null
+   690→      }
+   691→      const wasRunning = st.running || s.autoRun
+   692→      st.codeVersion = CODE_VERSION
+   693→      if (wasRunning) startBot()
+   694→      if (st.bootstrapped) return
+   695→    }
+   696→
+   697→    if (st.bootstrapped) return
+   698→    st.bootstrapped = true
+   699→    const state = await db.botState.upsert({
+   700→      where: { id: 'main' },
+   701→      update: {},
+   702→      create: { id: 'main', paperEquity: s.paperEquity, running: false },
+   703→    })
+   704→    st.cycles = state.cycles
+   705→    if (s.autoRun && !st.running) {
+   706→      startBot()
+   707→    }
+   708→  } catch (e) {
+   709→    await log('SYS', 'error', `Boot error: ${e instanceof Error ? e.message : e}`)
+   710→  }
+   711→}
+   712→
+   713→export async function resetPaper(): Promise<void> {
+   714→  await saveSettings({ paperEquity: 1000 })
+   715→  await db.trade.deleteMany({ where: { mode: 'PAPER' } })
+   716→  await db.position.deleteMany({ where: { mode: 'PAPER' } })
+   717→  await log('SYS', 'info', 'Paper trading direset: equity kembali ke 1000 USDT')
+   718→}
+   719→

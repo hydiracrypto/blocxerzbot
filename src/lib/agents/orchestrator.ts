@@ -597,7 +597,7 @@ async function runCycle() {
         }
         const size = await agent4Sizer(s, res, openCount)
         const execRes = await agent5Execute(s, res, size, existing ? { id: existing.id, side: existing.side } : null)
-        const executed = 'ok' in execRes && execRes.ok
+        const executed = 'ok' in execRes ? Boolean(execRes.ok) : false
         await db.signal.create({
           data: signalRow(res, s, executed, 'skipped' in execRes && execRes.skipped ? execRes.skipped : null),
         })

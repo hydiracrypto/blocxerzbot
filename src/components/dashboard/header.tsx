@@ -55,7 +55,13 @@ export function Header({ status, onRefresh }: { status: StatusResponse | null; o
         ? 'MEXC SPOT (fallback) · PASAR SUNGGUHAN'
         : status?.marketSource === 'BINANCE_FUTURES'
           ? 'BINANCE FUTURES (fallback) · PASAR SUNGGUHAN'
-          : 'MENYAMBUNGKAN…'
+          : status?.marketSource === 'BINANCE_SPOT'
+            ? 'BINANCE SPOT (fallback) · PASAR SUNGGUHAN'
+            : status?.marketSource === 'BYBIT'
+              ? 'BYBIT PERP (fallback) · PASAR SUNGGUHAN'
+              : status?.marketSource === 'OKX'
+                ? 'OKX SWAP (fallback) · PASAR SUNGGUHAN'
+                : 'MENYAMBUNGKAN…'
 
   return (
     <header className="sticky top-0 z-30 border-b border-white/10 bg-[#0b0f14]/95 backdrop-blur supports-[backdrop-filter]:bg-[#0b0f14]/80">

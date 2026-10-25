@@ -26,3 +26,22 @@ Stage Summary:
 - Di server user (VPS tanpa blokir): koneksi langsung MEXC Futures untuk data & eksekusi LIVE
 - Mode PAPER default (harga riil, tanpa modal); LIVE butuh API key + toggle eksplisit dgn dialog peringatan
 - Semua parameter Pine dapat diatur di UI: minScore 7, qmMinScore 6, TP 1R/2R/3R, SL buffer 0.5 ATR, max 3 ATR, cooldown, flip
+
+---
+Task ID: 2
+Agent: Main Agent (Z.ai)
+Task: Perbaiki error "Scanner gagal: HTTP 418" (Pair Scanner diblokir Binance)
+
+Work Log:
+- Diagnosis: HTTP 418 dari Binance = IP auto-ban rate limit. Penyebab: contract.mexc.com (403 Akamai) + MEXC Spot sempat gagal → seluruh trafik jatuh ke Binance Futures → weight tembak → ban. Fakta baru: endpoint data Binance Futures (fapi) & Binance Spot exchangeInfo juga region-blocked (403/timeout) dari sandbox
+- Rewrite src/lib/mexc/market-data.ts: (1) 6 sumber data — MEXC_FUTURES, MEXC_SPOT, BINANCE_FUTURES, BINANCE_SPOT, BYBIT (v5 linear perp), OKX (v5 SWAP) dgn mapping simbol/TF per sumber; (2) throttle per-host 150ms (anti-burst); (3) ban-aware: HTTP 418→istirahat ≥10 menit, 429→≥60 detik (Retry-After dihormati), 403/451→5 menit, gagal lain→backoff bertahap; (4) stale-cache rescue: semua sumber gagal → data terakhir sukses dipakai (tanpa error); (5) pesan error Indonesia yg jelas
+- Tambah provider: klines Bybit (max 1000 bar, reverse list), klines OKX (paginasi after=, 300 bar/hal), ticker+universe Bybit/OKX (turnover24h, volCcy24h×last)
+- Fix bug runtime lama blocxerz.ts: sibiAbovePwh & bisiBelowPwl dideklarasi di dalam blok if tapi dipakai di return (baris 788) → ReferenceError potensial saat bias bull/bear. Deklarasi dipindah ke scope fungsi
+- Fix tipe orchestrator.ts (executed boolean|undefined), header.tsx (label 6 sumber), status API (health 6 sumber + bannedUntil + banReason), base.tsx (tipe sources)
+- Uji: skrip scripts/test-market-data.ts — universe 812 aset (BYBIT), ticker 1454 pair (MEXC_SPOT), klines 6 TF × 3 simbol OK, cache hit 0ms
+- Restart dev server (setsid detach agar persisten), verifikasi siklus agent: A1 memindai 812 aset err=0, watchlist top 10, harga asli MEXC Spot (BTC 80.330), screenshot dashboard OK, banner "BYBIT PERP (fallback) · PASAR SUNGGUHAN"
+
+Stage Summary:
+- HTTP 418 tuntas: scanner tidak lagi jatuh ke satu sumber; 6 sumber pasar sungguhan + throttle + ban-aware + stale rescue
+- Kesehatan sumber di sandbox: MEXC_SPOT ✓, BYBIT ✓, OKX ✓ (MEXC Futures & Binance diblokir geo — otomatis dihindari, tetap dipakai di VPS user)
+- Semua agent kembali ACTIVE tanpa error; harga = pasar sungguhan

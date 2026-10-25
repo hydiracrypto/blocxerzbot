@@ -388,6 +388,9 @@ export function evaluate(symbol: string, input: StrategyInput, params: StrategyP
   let biasConf = 0
   let biasReason = 'Range not set'
   let biasStruct = '—'
+  // dipakai juga di return (draw on-chart) → harus di scope fungsi, bukan blok if
+  let bisiBelowPwl = NaN
+  let sibiAbovePwh = NaN
 
   if (!isNaN(pwh) && !isNaN(pwl) && !isNaN(atrW1) && atrW1 > 0) {
     const tol = atrW1 * 0.5
@@ -400,11 +403,9 @@ export function evaluate(symbol: string, input: StrategyInput, params: StrategyP
     let bisiBelow = NaN
     let ifvgAbove = NaN
     let ifvgBelow = NaN
-    let bisiBelowPwl = NaN
     let bisiBelowPwlTy = 0
     let bisiAnyBelow = NaN
     let bisiAnyBelowTy = 0
-    let sibiAbovePwh = NaN
     let sibiAbovePwhTy = 0
     let sibiAnyAbove = NaN
     let sibiAnyAboveTy = 0

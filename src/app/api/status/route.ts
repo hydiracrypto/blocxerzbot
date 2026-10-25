@@ -25,11 +25,12 @@ export async function GET() {
     dailyGuard: st.dailyGuardTriggered,
     openCount,
     lastSignalAt: lastSignal?.createdAt ?? null,
-    sources: {
-      MEXC_FUTURES: { ok: health.MEXC_FUTURES.ok },
-      MEXC_SPOT: { ok: health.MEXC_SPOT.ok },
-      BINANCE_FUTURES: { ok: health.BINANCE_FUTURES.ok },
-    },
+    sources: Object.fromEntries(
+      Object.entries(health).map(([k, v]) => [
+        k,
+        { ok: v.ok, bannedUntil: v.bannedUntil, banReason: v.banReason },
+      ])
+    ),
     scanRows: st.scanRows,
     radarRows: st.radarRows,
   })
