@@ -1,6 +1,3 @@
-// This is your Prisma schema file,
-// learn more about it in the docs: https://pris.ly/d/prisma-schema
-
 generator client {
   provider = "prisma-client-js"
 }
@@ -10,56 +7,98 @@ datasource db {
   url      = env("DATABASE_URL")
 }
 
-model User {
-  id        String   @id @default(cuid())
-  email     String   @unique
-  name      String?
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
-}
-
-model Post {
-  id        String   @id @default(cuid())
-  title     String
-  content   String?
-  published Boolean  @default(false)
-  authorId  String
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
-}
-
-// ================= TRADING BOT (REAL MARKET) =================
-
-model BotSetting {
-  id    Int    @id @default(autoincrement())
-  key   String @unique
+model Setting {
+  key   String @id
   value String
 }
 
-model BotTrade {
-  id         String  @id
+model BotState {
+  id           String    @id @default("main")
+  running      Boolean   @default(false)
+  startedAt    DateTime?
+  paperEquity  Float     @default(1000)
+  cycles       Int       @default(0)
+  lastTickAt   DateTime?
+  dataSource   String    @default("unknown")
+  marketSource String    @default("MEXC_FUTURES")
+  updatedAt    DateTime  @updatedAt
+}
+
+model Signal {
+  id         String   @id @default(cuid())
   symbol     String
-  strategy   String // turtle | seykota | schwartz | ptj | bollinger
-  side       String  @default("LONG")
-  sizeUsd    Float
-  qty        Float
-  entryPrice Float
-  exitPrice  Float?
-  pnlUsd     Float?
-  pnlPct     Float?
-  feeUsd     Float   @default(0)
-  reason     String
-  status     String  @default("OPEN") // OPEN | CLOSED
-  mode       String  @default("PAPER") // PAPER | LIVE
-  entryTime  Float
-  exitTime   Float?
-  meta       String? // JSON: stop, tp, peak, thesis, slippage, exchangeOrderId
+  direction  Int // 1 = LONG, -1 = SHORT
+  isQM       Boolean  @default(false)
+  score      Int
+  factors    String // JSON factor breakdown
+  entry      Float
+  sl         Float
+  tp1        Float
+  tp2        Float
+  tp3        Float
+  riskUsd    Float    @default(0)
+  qtyCoin    Float    @default(0)
+  timeframe  String   @default("15m")
+  dataSource String   @default("MEXC_FUTURES")
+  executed   Boolean  @default(false)
+  skipReason String?
   createdAt  DateTime @default(now())
 }
 
-model BotEquity {
-  id     Int    @id @default(autoincrement())
-  t      Float // timestamp ms
-  equity Float
-  cash   Float
+model Position {
+  id         String    @id @default(cuid())
+  symbol     String
+  side       Int // 1 = LONG, -1 = SHORT
+  qtyCoin    Float
+  remainCoin Float
+  entryPrice Float
+  sl         Float
+  tp1        Float
+  tp2        Float
+  tp3        Float
+  leverage   Float     @default(10)
+  margin     Float     @default(0)
+  riskUsd    Float     @default(0)
+  notional   Float     @default(0)
+  score      Int       @default(0)
+  isQM       Boolean   @default(false)
+  mode       String    @default("PAPER") // PAPER | LIVE
+  status     String    @default("OPEN") // OPEN | CLOSED
+  beMoved    Boolean   @default(false)
+  tp1Hit     Boolean   @default(false)
+  tp2Hit     Boolean   @default(false)
+  exitPrice  Float?
+  exitReason String?
+  pnl        Float     @default(0)
+  signalId   String?
+  exchangeId String?
+  openedAt   DateTime  @default(now())
+  closedAt   DateTime?
+}
+
+model Trade {
+  id         String   @id @default(cuid())
+  positionId String?
+  symbol     String
+  side       Int
+  qtyCoin    Float
+  entryPrice Float
+  exitPrice  Float
+  pnl        Float
+  pnlPct     Float
+  reason     String // TP1 | TP2 | TP3 | SL | FLIP | MANUAL
+  mode       String   @default("PAPER")
+  closedAt   DateTime @default(now())
+}
+
+model AgentLog {
+  id        String   @id @default(cuid())
+  agent     String // A1_SCANNER .. A6_MONITOR / SYS
+  level     String   @default("info") // info | warn | error | signal | trade
+  message   String
+  meta      String?
+  createdAt DateTime @default(now())
+
+  @@index([createdAt])
+  @@index([agent, createdAt])
 }

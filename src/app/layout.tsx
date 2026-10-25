@@ -14,9 +14,9 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "APEX-5 · Real-Market Autonomous Trading Desk",
-  description: "Bot trading otomatis di pasar sungguhan Binance Spot dengan 5 strategi trader legendaris dunia: Turtle (Richard Dennis), Trend Rider (Ed Seykota), Momentum (Marty Schwartz), Macro (Paul Tudor Jones), Mean Reversion (John Bollinger) + Risk Manager.",
-  keywords: ["trading bot", "otomatis", "binance", "crypto", "paper trading", "live trading", "strategi trading", "trend following"],
+  title: "BLOCXERZ MEXC Desk · 6 Agent Otonom 24/7",
+  description: "Bot trading otomatis MEXC Futures — strategi BLOCXERZ v3.0 (ICT Bias, FVG, Quasimodo, konfluensi 8 faktor) dengan 6 agent otonom: Pair Scanner, Volume Radar, Strategy Engine, Position Sizer, Executor, Risk Monitor.",
+  keywords: ["trading bot", "mexc futures", "otomatis", "crypto", "ICT", "FVG", "quasimodo", "long short"],
   icons: {
     icon: "https://z-cdn.chatglm.cn/z-ai/static/logo.svg",
   },
